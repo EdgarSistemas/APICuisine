@@ -129,7 +129,12 @@ venv/
 ENV/
 env.bak/
 venv.bak/
-.yml
+
+# Configuration files with sensitive data
+*.yml
+*.yaml
+!docker-compose.yml
+!.github/workflows/*.yml
 
 # Spyder project settings
 .spyderproject
