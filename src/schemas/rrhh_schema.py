@@ -15,6 +15,7 @@ class HorarioDetalleCreateSchema(Schema):
     hora_inicio = fields.Time(required=True)
     hora_fin = fields.Time(required=True)
     tolerancia_min = fields.Int(required=False, validate=validate.Range(min=0, max=60), missing=10)
+    turno_idx = fields.Int(required=False, validate=validate.Range(min=1), missing=1)
 
 
 class HorarioCreateSchema(Schema):
@@ -30,7 +31,7 @@ class HorarioUpdateSchema(Schema):
     """Schema para actualizar horario"""
     nombre = fields.Str(required=False, validate=validate.Length(min=1, max=120))
     descripcion = fields.Str(required=False, allow_none=True, validate=validate.Length(max=300))
-    es_activo = fields.Bool(required=False)
+    clave = fields.Str(required=True, validate=validate.Length(min=1, max=60))
 
 
 class HorarioResponseSchema(Schema):
@@ -41,7 +42,7 @@ class HorarioResponseSchema(Schema):
     nombre = fields.Str()
     descripcion = fields.Str(allow_none=True)
     es_activo = fields.Bool()
-    created_at = fields.DateTime(format='iso')
+    created_at = fields.DateTime(allow_none=True, format='%Y-%m-%d %H:%M:%S')
     
     class Meta:
         ordered = True
@@ -86,7 +87,7 @@ class UsuarioHorarioResponseSchema(Schema):
     fecha_fin = fields.Date(allow_none=True)
     es_recurring = fields.Bool()
     es_activo = fields.Bool()
-    created_at = fields.DateTime(format='iso')
+    created_at = fields.DateTime(allow_none=True, format='%Y-%m-%d %H:%M:%S')
     
     class Meta:
         ordered = True
@@ -114,8 +115,8 @@ class TurnoClaveResponseSchema(Schema):
     codigo = fields.Str()
     es_activo = fields.Bool()
     generado_por = fields.Int(allow_none=True)
-    generado_en = fields.DateTime(format='iso')
-    expira_en = fields.DateTime(format='iso', allow_none=True)
+    generado_en = fields.DateTime(allow_none=True, format='%Y-%m-%d %H:%M:%S')
+    expira_en = fields.DateTime(allow_none=True, format='%Y-%m-%d %H:%M:%S')
     uso_maximo = fields.Int()
     usos_count = fields.Int()
     
@@ -141,7 +142,7 @@ class AsistenciaResponseSchema(Schema):
     usuario_id = fields.Int()
     usuario_horario_id = fields.Int(allow_none=True)
     tipo_evento = fields.Int()  # 1=Entrada, 2=Salida
-    evento_ts = fields.DateTime(format='iso')
+    evento_ts = fields.DateTime(allow_none=True, format='%Y-%m-%d %H:%M:%S')
     origen = fields.Str(allow_none=True)
     lat = fields.Decimal(allow_none=True, places=6)
     lng = fields.Decimal(allow_none=True, places=6)
@@ -149,7 +150,7 @@ class AsistenciaResponseSchema(Schema):
     codigo_usuario = fields.Str(allow_none=True)
     codigo_validado = fields.Bool()
     observaciones = fields.Str(allow_none=True)
-    created_at = fields.DateTime(format='iso')
+    created_at = fields.DateTime(allow_none=True, format='%Y-%m-%d %H:%M:%S')
     
     class Meta:
         ordered = True
@@ -176,7 +177,7 @@ class SolicitudVacacionesResponseSchema(Schema):
     horario_usuario_id = fields.Int()
     motivo = fields.Str()
     estatus = fields.Int()  # 1=Registrada, 2=Aprobada, 3=Rechazada
-    created_at = fields.DateTime(format='iso')
+    created_at = fields.DateTime(allow_none=True, format='%Y-%m-%d %H:%M:%S')
     
     class Meta:
         ordered = True

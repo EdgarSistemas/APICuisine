@@ -4,7 +4,7 @@ HorarioService - Lógica de negocio para Horarios
 
 from src.dao.rrhh import HorarioDAO
 from src.schemas.rrhh_schema import HorarioCreateSchema, HorarioUpdateSchema
-from datetime import date
+from datetime import date, datetime
 import logging
 
 logger = logging.getLogger(__name__)
@@ -64,11 +64,11 @@ class HorarioService:
                 clave=data['clave'],
                 nombre=data['nombre'],
                 descripcion=data.get('descripcion'),
-                detalles_data=data['detalles']
+                detalles=data['detalles']
             )
             
-            logger.info(f"Horario creado: {horario['clave']} - ID {horario['id_horario']}")
-            return {"success": True, "horario": horario}
+            logger.info(f"Horario creado: {data['clave']} - ID {horario['horario']['id_horario']}")
+            return {"success": True, "horario": horario['horario'], "detalles": horario['detalles']}
             
         except Exception as e:
             logger.error(f"Error al crear horario: {str(e)}")
@@ -77,29 +77,40 @@ class HorarioService:
     
     @staticmethod
     def obtener_horario(id_horario: int) -> dict:
-        """Obtener horario por ID"""
+        """Obtener horario por ID con sus detalles completos"""
         try:
-            horario = HorarioDAO.obtener_horario_por_id(id_horario)
-            if not horario:
-                return {"success": False, "error": "Horario no encontrado", "horario": None}
-            return {"success": True, "horario": horario}
+            resultado = HorarioDAO.obtener_horario_con_detalles(id_horario)
+            
+            if not resultado:
+                return {
+                    "success": False,
+                    "error": "Horario no encontrado",
+                    "horario": None
+                }
+            
+            return {
+                "success": True,
+                "horario": resultado['horario'],
+                "detalles": resultado['detalles']
+            }
         except Exception as e:
             logger.error(f"Error al obtener horario: {str(e)}")
             return {"success": False, "error": str(e), "horario": None}
     
     
     @staticmethod
-    def listar_horarios(sucursal_id: int = None, es_activo: bool = True,
-                       limit: int = 100, offset: int = 0) -> dict:
-        """Listar horarios con filtros"""
+    def listar_horarios_por_sucursal(sucursal_id: int) -> dict:
+        """Listar horarios activos de una sucursal con sus detalles"""
         try:
-            horarios = HorarioDAO.listar_horarios(
+            horarios_con_detalles = HorarioDAO.listar_horarios(
                 sucursal_id=sucursal_id,
-                es_activo=es_activo,
-                limit=limit,
-                offset=offset
+                solo_activos=True
             )
-            return {"success": True, "horarios": horarios, "count": len(horarios)}
+            return {
+                "success": True,
+                "horarios": horarios_con_detalles,
+                "count": len(horarios_con_detalles)
+            }
         except Exception as e:
             logger.error(f"Error al listar horarios: {str(e)}")
             return {"success": False, "error": str(e), "horarios": []}
@@ -145,3 +156,152 @@ class HorarioService:
         except Exception as e:
             logger.error(f"Error al desactivar horario: {str(e)}")
             return {"success": False, "error": str(e)}
+    
+    
+    @staticmethod
+    def obtener_horario_usuario(usuario_id: int) -> dict:
+        """Obtener horario activo de un usuario con detalles completos"""
+        try:
+            resultado = HorarioDAO.obtener_horario_usuario(usuario_id)
+            
+            if not resultado:
+                return {
+                    "success": False,
+                    "error": "No se encontró horario activo para este usuario",
+                    "data": None
+                }
+            
+            return {
+                "success": True,
+                "data": resultado
+            }
+        except Exception as e:
+            logger.error(f"Error al obtener horario de usuario: {str(e)}")
+            return {"success": False, "error": str(e), "data": None}
+    
+    
+    @staticmethod
+    def obtener_codigo_turno(horario_id: int, fecha_str: str) -> dict:
+        """Obtener código de turno para un horario y fecha específicos"""
+        try:
+            # Convertir string a date
+            try:
+                fecha = datetime.strptime(fecha_str, '%Y-%m-%d').date()
+            except ValueError:
+                return {
+                    "success": False,
+                    "error": "Formato de fecha inválido. Use YYYY-MM-DD",
+                    "codigo": None
+                }
+            
+            resultado = HorarioDAO.obtener_codigo_turno(horario_id, fecha)
+            
+            if not resultado:
+                return {
+                    "success": False,
+                    "error": "No se encontró código de turno para este horario y fecha",
+                    "codigo": None
+                }
+            
+            return {
+                "success": True,
+                "codigo": resultado
+            }
+        except Exception as e:
+            logger.error(f"Error al obtener código de turno: {str(e)}")
+            return {"success": False, "error": str(e), "codigo": None}
+    
+    
+    @staticmethod
+    def asignar_horario_a_usuario(usuario_id: int, horario_id: int, fecha_inicio_str: str, fecha_fin_str: str = None) -> dict:
+        """Asignar horario a un usuario"""
+        try:
+            # Validar y convertir fecha_inicio
+            try:
+                fecha_inicio = datetime.strptime(fecha_inicio_str, '%Y-%m-%d').date()
+            except ValueError:
+                return {
+                    "success": False,
+                    "error": "Formato de fecha_inicio inválido. Use YYYY-MM-DD",
+                    "asignacion": None
+                }
+            
+            # Validar y convertir fecha_fin si se proporciona
+            fecha_fin = None
+            if fecha_fin_str:
+                try:
+                    fecha_fin = datetime.strptime(fecha_fin_str, '%Y-%m-%d').date()
+                    # Validar que fecha_fin sea posterior a fecha_inicio
+                    if fecha_fin <= fecha_inicio:
+                        return {
+                            "success": False,
+                            "error": "La fecha_fin debe ser posterior a fecha_inicio",
+                            "asignacion": None
+                        }
+                except ValueError:
+                    return {
+                        "success": False,
+                        "error": "Formato de fecha_fin inválido. Use YYYY-MM-DD",
+                        "asignacion": None
+                    }
+            
+            resultado = HorarioDAO.asignar_horario_a_usuario(
+                usuario_id=usuario_id,
+                horario_id=horario_id,
+                fecha_inicio=fecha_inicio,
+                fecha_fin=fecha_fin
+            )
+            
+            if resultado.get('error') == 'HORARIO_NO_ENCONTRADO':
+                return {
+                    "success": False,
+                    "error": "Horario no encontrado o no está activo",
+                    "asignacion": None
+                }
+            
+            if resultado.get('error') == 'USUARIO_YA_TIENE_HORARIO':
+                return {
+                    "success": False,
+                    "error": f"El usuario ya tiene un horario activo asignado (ID: {resultado.get('horario_actual')}). No se permite más de un horario activo por usuario.",
+                    "asignacion": None
+                }
+            
+            return {
+                "success": True,
+                "asignacion": resultado['data'],
+                "message": "Horario asignado exitosamente al usuario"
+            }
+            
+        except Exception as e:
+            logger.error(f"Error al asignar horario a usuario: {str(e)}")
+            return {"success": False, "error": str(e), "asignacion": None}
+    
+    
+    @staticmethod
+    def generar_codigos_turno(fecha_generacion: str = None, expira_horas: int = 2) -> tuple:
+        """
+        Genera códigos de turno para el día especificado.
+        Si no se especifica fecha, usa hoy.
+        """
+        try:
+            # Parsear fecha si viene como string
+            if fecha_generacion:
+                fecha = datetime.strptime(fecha_generacion, '%Y-%m-%d').date()
+            else:
+                fecha = date.today()
+            
+            logger.info(f"Generando códigos para fecha: {fecha}")
+            
+            resultado = HorarioDAO.generar_codigos_turno_dia(fecha, expira_horas)
+            
+            if not resultado:
+                return {"error": "No se pudieron generar códigos"}, 500
+            
+            return resultado, 200
+            
+        except ValueError as e:
+            logger.error(f"Fecha inválida: {str(e)}")
+            return {"error": "Formato de fecha inválido. Use YYYY-MM-DD"}, 400
+        except Exception as e:
+            logger.error(f"Error al generar códigos: {str(e)}")
+            return {"error": str(e)}, 500

@@ -22,6 +22,7 @@ bp = Blueprint('insumos', __name__, url_prefix='/api/insumos')
 # GET /api/insumos - Listar Insumos
 # ============================================================================
 @bp.route('', methods=['GET'])
+@jwt_required()
 def listar_insumos():
     """
     Listar todos los insumos activos (sin existencias)
@@ -49,6 +50,7 @@ def listar_insumos():
 # POST /api/insumos/existencias - Listar Insumos con Existencias por Sucursal
 # ============================================================================
 @bp.route('/existencias', methods=['POST'])
+@jwt_required()
 def listar_insumos_con_existencias():
     """
     Listar todos los insumos con sus existencias para una sucursal
@@ -142,6 +144,7 @@ def listar_insumos_con_existencias():
 # GET /api/insumos/<id> - Obtener Insumo por ID
 # ============================================================================
 @bp.route('/<int:insumo_id>', methods=['GET'])
+@jwt_required()
 def obtener_insumo(insumo_id):
     """
     Obtener insumo por ID
