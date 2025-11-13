@@ -78,10 +78,8 @@ class ModuloDAO:
                 if filtros:
                     if 'es_activo' in filtros:
                         query = query.filter(Modulo.es_activo == filtros['es_activo'])
-                    if 'requiere_permisos' in filtros:
-                        query = query.filter(Modulo.requiere_permisos == filtros['requiere_permisos'])
                 
-                query = query.order_by(Modulo.orden, Modulo.nombre)
+                query = query.order_by(Modulo.nombre)
                 modulos = query.all()
                 return [self._modulo_to_dict(modulo) for modulo in modulos]
                 
@@ -131,12 +129,7 @@ class ModuloDAO:
                         'id_rol': rol.id_rol,
                         'nombre': rol.nombre,
                         'descripcion': rol.descripcion,
-                        'permisos': {
-                            'lectura': rol_modulo.lectura,
-                            'escritura': rol_modulo.escritura,
-                            'eliminacion': rol_modulo.eliminacion,
-                            'aprobacion': rol_modulo.aprobacion
-                        }
+                        'habilitado': rol_modulo.habilitado
                     }
                     resultado.append(rol_dict)
                 
@@ -180,12 +173,11 @@ class ModuloDAO:
                         and_(
                             UsuarioRol.usuario_id == usuario_id,
                             RolModulo.habilitado == True,
-                            RolModulo.lectura == True,  # Al menos debe tener lectura
                             Modulo.es_activo == True
                         )
                     )\
                     .distinct()\
-                    .order_by(Modulo.orden, Modulo.nombre)\
+                    .order_by(Modulo.nombre)\
                     .all()
                 
                 return [self._modulo_to_dict(modulo) for modulo in modulos]
@@ -210,7 +202,7 @@ class ModuloDAO:
                     if 'es_activo' in filtros:
                         query = query.filter(Modulo.es_activo == filtros['es_activo'])
                 
-                modulos = query.order_by(Modulo.orden, Modulo.nombre).all()
+                modulos = query.order_by(Modulo.nombre).all()
                 return [self._modulo_to_dict(modulo) for modulo in modulos]
                 
         except SQLAlchemyError as e:
@@ -224,11 +216,7 @@ class ModuloDAO:
             'nombre': modulo.nombre,
             'clave': modulo.clave,
             'descripcion': modulo.descripcion,
-            'icono': modulo.icono,
-            'url': modulo.url,
-            'orden': modulo.orden,
             'es_activo': modulo.es_activo,
-            'requiere_permisos': modulo.requiere_permisos,
             'created_at': modulo.created_at.isoformat() if modulo.created_at else None,
             'updated_at': modulo.updated_at.isoformat() if modulo.updated_at else None
         }

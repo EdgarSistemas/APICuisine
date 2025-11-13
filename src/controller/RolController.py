@@ -296,3 +296,63 @@ def asignar_modulos(id_rol):
             'message': 'Error interno del servidor'
         })), 500
 
+
+@roles_bp.route('/modulos', methods=['GET'])
+@jwt_required()
+def listar_modulos_activos():
+    """
+    Listar todos los módulos activos
+    ---
+    tags:
+      - Roles
+    summary: Obtener lista de módulos activos
+    description: Retorna todos los módulos activos del sistema
+    security:
+      - Bearer: []
+    responses:
+      200:
+        description: Lista de módulos activos
+        schema:
+          type: object
+          properties:
+            success:
+              type: boolean
+            modulos:
+              type: array
+              items:
+                type: object
+                properties:
+                  id_modulo:
+                    type: integer
+                  nombre:
+                    type: string
+                  clave:
+                    type: string
+                  descripcion:
+                    type: string
+                  es_activo:
+                    type: boolean
+                  created_at:
+                    type: string
+                  updated_at:
+                    type: string
+            count:
+              type: integer
+      500:
+        description: Error interno del servidor
+    """
+    try:
+        resultado = rol_service.listar_modulos_activos()
+        
+        if resultado['success']:
+            return jsonify(resultado), 200
+        else:
+            return jsonify(error_schema.dump(resultado)), 500
+        
+    except Exception as e:
+        logger.error(f"Error en listar_modulos_activos: {str(e)}")
+        return jsonify(error_schema.dump({
+            'error': 'INTERNAL_ERROR',
+            'message': 'Error interno del servidor'
+        })), 500
+

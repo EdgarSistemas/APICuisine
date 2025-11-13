@@ -8,6 +8,7 @@ from datetime import datetime
 
 from src.core.db.session_manager import get_db_session
 from src.models.auth import Rol, Usuario, UsuarioRol, RolModulo, Modulo
+from src.dao.auth.modulo_dao import ModuloDAO
 from src.services.auditoria.log_service import log_action
 
 logger = logging.getLogger(__name__)
@@ -315,5 +316,29 @@ class RolService:
                 'success': False,
                 'error': 'ASSIGN_MODULES_ERROR',
                 'message': 'Error al asignar módulos',
+                'details': str(e)
+            }
+            
+    def listar_modulos_activos(self) -> Dict[str, Any]:
+        """
+        Listar todos los módulos activos
+        
+        Returns:
+            Dict con lista de módulos
+        """
+        try:
+            modulo_dao = ModuloDAO()
+            modulos = modulo_dao.listar_modulos()
+            return {
+                'success': True,
+                'data': modulos
+            }
+                
+        except Exception as e:
+            logger.error(f"Error al listar módulos activos: {str(e)}")
+            return {
+                'success': False,
+                'error': 'LIST_ACTIVE_MODULES_ERROR',
+                'message': 'Error al listar módulos activos',
                 'details': str(e)
             }
