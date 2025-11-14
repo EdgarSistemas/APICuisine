@@ -31,7 +31,7 @@ class UsuarioService:
         """
         try:
             # Validaciones específicas para usuarios del sistema
-            if not datos.get('sucursal_id'):
+            if not datos.get('sucursal_id') and datos.get('rol_id') != 1:
                 raise ValueError("Sucursal es requerida para usuarios del sistema")
             
             if not datos.get('rol_id'):

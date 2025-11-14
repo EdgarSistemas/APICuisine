@@ -37,7 +37,7 @@ class UsuarioDAO:
                 session.flush()  # Para obtener el ID
                 
                 # Asignar a sucursal
-                if 'sucursal_id' in datos:
+                if 'sucursal_id' in datos and datos['sucursal_id'] is not None:
                     usuario_sucursal = UsuarioSucursal(
                         usuario_id=usuario.id_usuario,
                         sucursal_id=datos['sucursal_id']
