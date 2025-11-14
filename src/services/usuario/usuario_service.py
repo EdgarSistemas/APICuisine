@@ -542,6 +542,8 @@ class UsuarioService:
             'tipo_acceso': usuario.get('tipo_acceso', ''),
             'mostrar_empresas': es_admin,
             'roles': usuario.get('roles', []),
+            'created_at': usuario.get('created_at', None),
+            'updated_at': usuario.get('updated_at', None),
             'modulos': usuario.get('modulos', []),
             'sucursales': sucursales
         }

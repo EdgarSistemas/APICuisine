@@ -170,8 +170,8 @@ class UsuarioDAO:
             'es_cliente': usuario.es_cliente,
             'acepta_marketing': usuario.acepta_marketing,
             'tipo_acceso': usuario.tipo_acceso,
-            'created_at': usuario.created_at.isoformat() if usuario.created_at else None,
-            'updated_at': usuario.updated_at.isoformat() if usuario.updated_at else None,
+            'created_at': usuario.created_at.strftime('%Y-%m-%d %H:%M:%S') if usuario.created_at else None,
+            'updated_at': usuario.updated_at.strftime('%Y-%m-%d %H:%M:%S') if usuario.updated_at else None,
             'roles': [{'id_rol': r.id_rol, 'nombre': r.nombre, 'descripcion': r.descripcion} for r in usuario.roles] if usuario.roles else [],
             'sucursales': [{'sucursal_id': s.sucursal_id} for s in usuario.sucursales] if usuario.sucursales else []
         }

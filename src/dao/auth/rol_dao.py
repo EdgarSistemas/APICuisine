@@ -175,6 +175,62 @@ class RolDAO:
             logger.error(f"Error al obtener módulos del rol {rol_id}: {str(e)}")
             raise RuntimeError(f"Error en base de datos: {str(e)}")
     
+    def listar_roles_con_modulos_y_usuarios(self, search: str = '') -> List[Dict[str, Any]]:
+        """Listar roles con sus módulos y conteo de usuarios asignados"""
+        try:
+            with get_db_session() as session:
+                query = session.query(Rol)
+                
+                # Aplicar filtro de búsqueda
+                if search:
+                    query = query.filter(
+                        (Rol.nombre.contains(search)) |
+                        (Rol.descripcion.contains(search))
+                    )
+                
+                roles = query.order_by(Rol.nombre).all()
+                
+                roles_data = []
+                for rol in roles:
+                    # Obtener módulos del rol
+                    modulos = session.query(Modulo)\
+                        .join(RolModulo, Modulo.id_modulo == RolModulo.modulo_id)\
+                        .filter(
+                            RolModulo.rol_id == rol.id_rol,
+                            RolModulo.habilitado == True
+                        )\
+                        .order_by(Modulo.nombre)\
+                        .all()
+                    
+                    modulos_data = []
+                    for modulo in modulos:
+                        modulos_data.append({
+                            'id_modulo': modulo.id_modulo,
+                            'nombre': modulo.nombre,
+                            'clave': modulo.clave,
+                            'descripcion': modulo.descripcion
+                        })
+                    
+                    # Contar usuarios asignados a este rol
+                    count_usuarios = session.query(UsuarioRol)\
+                        .filter(UsuarioRol.rol_id == rol.id_rol)\
+                        .count()
+                    
+                    rol_dict = {
+                        'id_rol': rol.id_rol,
+                        'nombre': rol.nombre,
+                        'descripcion': rol.descripcion,
+                        'modulos': modulos_data,
+                        'usuarios_asignados': count_usuarios
+                    }
+                    roles_data.append(rol_dict)
+                
+                return roles_data
+                
+        except SQLAlchemyError as e:
+            logger.error(f"Error al listar roles con módulos: {str(e)}")
+            raise RuntimeError(f"Error en base de datos: {str(e)}")
+    
     def _rol_to_dict(self, rol) -> Dict[str, Any]:
         """Convertir rol a diccionario"""
         return {

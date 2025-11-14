@@ -1,7 +1,7 @@
 """
 Modelo declarativo para Usuario
 """
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Text
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Text, text
 from sqlalchemy.orm import relationship
 from src.models.base import BaseModel, TimestampMixin
 
@@ -23,6 +23,10 @@ class Usuario(BaseModel, TimestampMixin):
     es_cliente = Column(Boolean, default=False, nullable=False)
     acepta_marketing = Column(Boolean, default=False, nullable=False)
     tipo_acceso = Column(String(5), nullable=True)
+    created_at = Column(DateTime, nullable=False, server_default=text('GETUTCDATE()'),
+                       comment='Fecha de creación del registro')
+    updated_at = Column(DateTime, nullable=True, onupdate=text('GETUTCDATE()'),
+                       comment='Fecha de última actualización del registro')
     # Relaciones
     roles = relationship(
         "Rol", 

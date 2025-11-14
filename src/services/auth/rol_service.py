@@ -9,6 +9,7 @@ from datetime import datetime
 from src.core.db.session_manager import get_db_session
 from src.models.auth import Rol, Usuario, UsuarioRol, RolModulo, Modulo
 from src.dao.auth.modulo_dao import ModuloDAO
+from src.dao.auth.rol_dao import RolDAO
 from src.services.auditoria.log_service import log_action
 
 logger = logging.getLogger(__name__)
@@ -92,42 +93,22 @@ class RolService:
     
     def listar_roles(self, search: str = '') -> Dict[str, Any]:
         """
-        Listar roles con búsqueda opcional
+        Listar roles con búsqueda opcional, incluyendo sus módulos y usuarios
         
         Args:
             search: Término de búsqueda
             
         Returns:
-            Dict con lista de roles
+            Dict con lista de roles, sus módulos y conteo de usuarios
         """
         try:
-            with get_db_session() as session:
-                query = session.query(Rol)
-                
-                # Aplicar filtro de búsqueda
-                if search:
-                    query = query.filter(
-                        Rol.nombre.contains(search) |
-                        Rol.descripcion.contains(search)
-                    )
-                
-                # Obtener todos los roles
-                roles = query.order_by(Rol.nombre).all()
-                
-                # Convertir a diccionarios
-                roles_data = []
-                for rol in roles:
-                    rol_dict = {
-                        'id_rol': rol.id_rol,
-                        'nombre': rol.nombre,
-                        'descripcion': rol.descripcion
-                    }
-                    roles_data.append(rol_dict)
-                
-                return {
-                    'success': True,
-                    'data': roles_data
-                }
+            rol_dao = RolDAO()
+            roles_data = rol_dao.listar_roles_con_modulos_y_usuarios(search)
+            
+            return {
+                'success': True,
+                'data': roles_data
+            }
                 
         except Exception as e:
             logger.error(f"Error al listar roles: {str(e)}")

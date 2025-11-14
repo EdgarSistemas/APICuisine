@@ -34,7 +34,7 @@ def init_swagger(app: Flask):
             "description": "API para gestión de restaurantes y usuarios",
             "version": "1.0.0"
         },
-        "host": "https://api-cuisine-intellisoft-a2bpbafygvekfcc5.canadacentral-01.azurewebsites.net",
+        "host": "localhost:5000",
         "basePath": "/",
         "consumes": ["application/json"],
         "produces": ["application/json"],

@@ -34,7 +34,6 @@ class Area(Base):
     # Campos de auditoría
     created_at = Column(DateTime, nullable=False, server_default=text('GETUTCDATE()'),
                        comment='Fecha de creación del registro')
-    # Nota: Area NO tiene updated_at según el schema
     
     # Relaciones (se definen aquí pero se implementan cuando existan los modelos)
     # sucursal = relationship("Sucursal", back_populates="areas")

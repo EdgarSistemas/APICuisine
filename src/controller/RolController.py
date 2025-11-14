@@ -112,7 +112,7 @@ def listar_roles():
         # Obtener búsqueda opcional
         search = request.args.get('search', '')
         
-        # Listar roles (SIN PAGINACIÓN)
+        # Listar roles
         resultado = rol_service.listar_roles(search=search)
         
         if resultado['success']:
