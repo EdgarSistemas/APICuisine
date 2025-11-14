@@ -108,8 +108,7 @@ class UsuarioDAO:
                         query = query.join(UsuarioSucursal).filter(
                             UsuarioSucursal.sucursal_id == filtros['sucursal_id']
                         )
-                
-                usuarios = query.all()
+                usuarios = query.where(Usuario.es_activo == True).all()
                 return [self._usuario_to_dict(usuario, session) for usuario in usuarios]
                 
         except SQLAlchemyError as e:

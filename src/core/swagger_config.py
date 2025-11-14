@@ -36,7 +36,6 @@ def init_swagger(app: Flask):
         },
         "host": "https://api-cuisine-intellisoft-a2bpbafygvekfcc5.canadacentral-01.azurewebsites.net",
         "basePath": "/",
-        "schemes": ["http"],
         "consumes": ["application/json"],
         "produces": ["application/json"],
         
