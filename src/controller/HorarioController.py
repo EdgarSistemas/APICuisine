@@ -565,7 +565,6 @@ def asignar_horario_usuario():
 
 
 @horario_bp.route('/generar-codigos', methods=['POST'])
-@jwt_required()
 def generar_codigos():
     """
     Generar códigos de turno para el día especificado

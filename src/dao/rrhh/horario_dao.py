@@ -398,7 +398,7 @@ class HorarioDAO:
                         "horario_id": codigo_existente.horario_id,
                         "horario_detalle_id": codigo_existente.horario_detalle_id,
                         "codigo": codigo_existente.codigo,
-                        "fecha": codigo_existente.fecha.isoformat(),
+                        "fecha": codigo_existente.fecha,
                         "ya_existia": True
                     })
                     continue
