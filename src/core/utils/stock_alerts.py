@@ -191,18 +191,26 @@ class PushTokenDAO:
                 query = query.filter(Usuario.es_cliente == filtros_usuario['es_cliente'])
             
             if 'rol' in filtros_usuario:
-                from src.models.auth import Rol
+                from src.models.auth import Rol, UsuarioRol
                 rol_nombre = filtros_usuario['rol']
                 query = query.join(
+                    UsuarioRol,
+                    Usuario.id_usuario == UsuarioRol.usuario_id,
+                    isouter=False
+                ).join(
                     Rol,
-                    Usuario.roles.any(Rol.nombre == rol_nombre)
+                    UsuarioRol.rol_id == Rol.id_rol,
+                    isouter=False
+                ).filter(
+                    Rol.nombre == rol_nombre
                 )
             
             if 'sucursal_id' in filtros_usuario:
                 from src.models.auth import UsuarioSucursal
                 query = query.join(
                     UsuarioSucursal,
-                    Usuario.id_usuario == UsuarioSucursal.usuario_id
+                    Usuario.id_usuario == UsuarioSucursal.usuario_id,
+                    isouter=False
                 ).filter(UsuarioSucursal.sucursal_id == filtros_usuario['sucursal_id'])
             
             # Aplicar filtro de usuarios activos

@@ -189,41 +189,41 @@ class FCMNotificationService:
                 )
             )
             
-            # Enviar a múltiples dispositivos
-            mensajes = [
-                messaging.MulticastMessage(
-                    tokens=tokens,
-                    notification=notificacion,
-                    data=datos_personalizados or {},
-                    android=config_android,
-                    webpush=config_web
-                )
-            ]
-            
-            respuesta = messaging.send_multicast(mensajes[0])
-            
-            # Procesar resultados
+            # Enviar a múltiples dispositivos (uno por uno)
+            mensajes_exitosos = 0
+            mensajes_fallidos = 0
             tokens_fallidos = []
             detalles_error = []
             
-            for idx, respuesta_individual in enumerate(respuesta.responses):
-                if not respuesta_individual.success:
-                    tokens_fallidos.append(tokens[idx])
+            for token in tokens:
+                try:
+                    msg = messaging.Message(
+                        token=token,
+                        notification=notificacion,
+                        data=datos_personalizados or {},
+                        android=config_android,
+                        webpush=config_web
+                    )
+                    messaging.send(msg)
+                    mensajes_exitosos += 1
+                except Exception as e:
+                    mensajes_fallidos += 1
+                    tokens_fallidos.append(token)
                     detalles_error.append({
-                        "token": tokens[idx][:20] + "...",
-                        "error": str(respuesta_individual.exception)
+                        "token": token[:20] + "...",
+                        "error": str(e)
                     })
             
             resultado = {
-                "success": respuesta.failure_count == 0,
-                "mensajes_exitosos": respuesta.success_count,
-                "mensajes_fallidos": respuesta.failure_count,
+                "success": mensajes_fallidos == 0,
+                "mensajes_exitosos": mensajes_exitosos,
+                "mensajes_fallidos": mensajes_fallidos,
                 "tokens_fallidos": tokens_fallidos,
                 "detalles_error": detalles_error,
                 "timestamp": datetime.now(ZoneInfo("America/Mexico_City")).isoformat()
             }
             
-            logger.info(f"Notificaciones enviadas: {respuesta.success_count} exitosas, {respuesta.failure_count} fallidas")
+            logger.info(f"Notificaciones enviadas: {mensajes_exitosos} exitosas, {mensajes_fallidos} fallidas")
             return resultado
             
         except Exception as e:
