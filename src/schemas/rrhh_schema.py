@@ -161,13 +161,13 @@ class AsistenciaResponseSchema(Schema):
 # ============================================================================
 class SolicitudVacacionesCreateSchema(Schema):
     """Schema para solicitar vacaciones"""
-    motivo = fields.Str(required=True, validate=validate.Length(min=1, max=300))
     fecha_inicio = fields.Date(required=True)
     fecha_fin = fields.Date(required=True)
+    motivo = fields.Str(required=False, allow_none=True, validate=validate.Length(min=1, max=300))
     
     @validates('fecha_fin')
     def validate_fecha_fin(self, value):
-        # Nota: fecha_inicio se valida en el service
+        # La validación de rango se hace en el DAO
         pass
 
 
@@ -175,7 +175,9 @@ class SolicitudVacacionesResponseSchema(Schema):
     """Schema para respuesta de solicitud"""
     id_solicitud = fields.Int()
     horario_usuario_id = fields.Int()
-    motivo = fields.Str()
+    fecha_inicio = fields.Date(allow_none=True)
+    fecha_fin = fields.Date(allow_none=True)
+    motivo = fields.Str(allow_none=True)
     estatus = fields.Int()  # 1=Registrada, 2=Aprobada, 3=Rechazada
     created_at = fields.DateTime(allow_none=True, format='%Y-%m-%d %H:%M:%S')
     
@@ -207,6 +209,5 @@ class CheckOutSchema(Schema):
 # Schema para aprobar/rechazar vacaciones
 class AprobarVacacionesSchema(Schema):
     """Schema para aprobar o rechazar solicitud de vacaciones"""
-    aprobar = fields.Bool(required=True)  # True = aprobar, False = rechazar
-    comentario = fields.Str(required=False, allow_none=True, validate=validate.Length(max=500))
+    notas_gerente = fields.Str(required=False, allow_none=True, validate=validate.Length(max=300))
 

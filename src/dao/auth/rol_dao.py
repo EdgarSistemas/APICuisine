@@ -181,12 +181,14 @@ class RolDAO:
             with get_db_session() as session:
                 query = session.query(Rol)
                 
-                # Aplicar filtro de búsqueda
+                # Siempre excluir rol cliente (id=10)
+                query = query.filter(Rol.id_rol != 10)
+
+                # Aplicar búsqueda si existe
                 if search:
                     query = query.filter(
-                        (Rol.nombre.contains(search)) |
-                        (Rol.descripcion.contains(search))
-                    )
+                        (Rol.nombre.contains(search)) | 
+                        (Rol.descripcion.contains(search)))
                 
                 roles = query.order_by(Rol.nombre).all()
                 

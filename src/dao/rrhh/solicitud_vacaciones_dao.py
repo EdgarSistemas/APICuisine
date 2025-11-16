@@ -17,14 +17,12 @@ class SolicitudVacacionesDAO:
     """Data Access Object para SolicitudVacaciones"""
     
     @staticmethod
-    def crear_solicitud(usuario_id: int, usuario_horario_id: int, fecha_inicio: date,
-                       fecha_fin: date, motivo: str = None) -> dict:
+    def crear_solicitud(usuario_horario_id: int, fecha_inicio: date, fecha_fin: date, motivo: str = None) -> dict:
         """
         Crear solicitud de vacaciones.
         
         Args:
-            usuario_id: ID del empleado solicitante
-            usuario_horario_id: ID de la asignación de horario
+            usuario_horario_id: ID de la asignación de horario del empleado
             fecha_inicio: Fecha inicial de vacaciones
             fecha_fin: Fecha final de vacaciones
             motivo: Motivo de la solicitud (opcional)
@@ -35,7 +33,20 @@ class SolicitudVacacionesDAO:
         schema = SolicitudVacacionesResponseSchema()
         
         with get_db_session() as session:
-            # 1. Validar que fecha_fin >= fecha_inicio
+            # Validar que el horario_usuario_id existe
+            horario_usuario = session.query(UsuarioHorario).filter(
+                UsuarioHorario.id_usuario_horario == usuario_horario_id,
+                UsuarioHorario.activo == 1
+            ).first()
+            
+            if not horario_usuario:
+                return {
+                    "success": False,
+                    "error": "Asignación de horario no encontrada o inactiva",
+                    "solicitud": None
+                }
+            
+            # Validar que fecha_fin >= fecha_inicio
             if fecha_fin < fecha_inicio:
                 return {
                     "success": False,
@@ -43,9 +54,10 @@ class SolicitudVacacionesDAO:
                     "solicitud": None
                 }
             
-            # 2. Validar que no haya solapamiento con otras solicitudes aprobadas
-            solapamiento = session.query(SolicitudVacaciones).filter(
-                SolicitudVacaciones.usuario_id == usuario_id,
+            # Validar que no haya solapamiento con otras solicitudes aprobadas del mismo usuario
+            usuario_id = horario_usuario.usuario_id
+            solapamiento = session.query(SolicitudVacaciones).join(UsuarioHorario).filter(
+                UsuarioHorario.usuario_id == usuario_id,
                 SolicitudVacaciones.estatus == 2,  # Aprobada
                 and_(
                     SolicitudVacaciones.fecha_inicio <= fecha_fin,
@@ -60,23 +72,20 @@ class SolicitudVacacionesDAO:
                     "solicitud": None
                 }
             
-            # 3. Crear solicitud
+            # Crear solicitud
             solicitud = SolicitudVacaciones(
-                usuario_id=usuario_id,
-                usuario_horario_id=usuario_horario_id,
+                horario_usuario_id=usuario_horario_id,
                 fecha_inicio=fecha_inicio,
                 fecha_fin=fecha_fin,
                 motivo=motivo,
                 estatus=1,  # Pendiente
-                solicitado_en=datetime.now(),
-                revisado_por=None,
-                revisado_en=None,
-                notas_gerente=None
+                created_at=datetime.now()
             )
             session.add(solicitud)
             session.commit()
+            session.refresh(solicitud)
             
-            logger.info(f"Solicitud de vacaciones creada: ID {solicitud.id_solicitud} para usuario {usuario_id}")
+            logger.info(f"Solicitud de vacaciones creada: ID {solicitud.id_solicitud} para horario_usuario {usuario_horario_id}")
             return {
                 "success": True,
                 "solicitud": schema.dump(solicitud)
@@ -101,18 +110,24 @@ class SolicitudVacacionesDAO:
         with get_db_session() as session:
             query = session.query(SolicitudVacaciones)
             
+            # Filtrar por usuario
             if usuario_id:
-                query = query.filter(SolicitudVacaciones.usuario_id == usuario_id)
+                query = query.join(UsuarioHorario).filter(
+                    UsuarioHorario.usuario_id == usuario_id
+                )
             
+            # Filtrar por sucursal
             if sucursal_id:
                 query = query.join(UsuarioHorario).join(Horario).filter(
                     Horario.sucursal_id == sucursal_id
                 )
             
+            # Filtrar por estatus
             if estatus:
                 query = query.filter(SolicitudVacaciones.estatus == estatus)
             
-            query = query.order_by(SolicitudVacaciones.solicitado_en.desc())
+            # Ordenar por fecha de creación descendente
+            query = query.order_by(SolicitudVacaciones.created_at.desc())
             query = query.limit(limit).offset(offset)
             
             solicitudes = query.all()
@@ -131,7 +146,7 @@ class SolicitudVacacionesDAO:
     
     
     @staticmethod
-    def aprobar_solicitud(id_solicitud: int, revisado_por: int, notas_gerente: str = None) -> dict:
+    def aprobar_solicitud(id_solicitud: int, revisado_por: int) -> dict:
         """
         Aprobar solicitud de vacaciones.
         Solo el gerente de la sucursal puede aprobar.
@@ -139,7 +154,6 @@ class SolicitudVacacionesDAO:
         Args:
             id_solicitud: ID de la solicitud
             revisado_por: ID del gerente que aprueba
-            notas_gerente: Notas del gerente (opcional)
         """
         schema = SolicitudVacacionesResponseSchema()
         
@@ -160,14 +174,8 @@ class SolicitudVacacionesDAO:
             
             # Actualizar solicitud
             solicitud.estatus = 2  # Aprobada
-            solicitud.revisado_por = revisado_por
-            solicitud.revisado_en = datetime.now()
-            solicitud.notas_gerente = notas_gerente
-            
-            # TODO: Desactivar UsuarioHorario para esas fechas (opcional)
-            # Esto se puede hacer en el servicio si se requiere
-            
             session.commit()
+            session.refresh(solicitud)
             
             logger.info(f"Solicitud {id_solicitud} aprobada por gerente {revisado_por}")
             return {
@@ -177,14 +185,13 @@ class SolicitudVacacionesDAO:
     
     
     @staticmethod
-    def rechazar_solicitud(id_solicitud: int, revisado_por: int, notas_gerente: str = None) -> dict:
+    def rechazar_solicitud(id_solicitud: int, revisado_por: int) -> dict:
         """
         Rechazar solicitud de vacaciones.
         
         Args:
             id_solicitud: ID de la solicitud
             revisado_por: ID del gerente que rechaza
-            notas_gerente: Motivo del rechazo (opcional pero recomendado)
         """
         schema = SolicitudVacacionesResponseSchema()
         
@@ -205,11 +212,8 @@ class SolicitudVacacionesDAO:
             
             # Actualizar solicitud
             solicitud.estatus = 3  # Rechazada
-            solicitud.revisado_por = revisado_por
-            solicitud.revisado_en = datetime.now()
-            solicitud.notas_gerente = notas_gerente or "Sin motivo especificado"
-            
             session.commit()
+            session.refresh(solicitud)
             
             logger.info(f"Solicitud {id_solicitud} rechazada por gerente {revisado_por}")
             return {
@@ -247,8 +251,8 @@ class SolicitudVacacionesDAO:
         fecha = fecha or date.today()
         
         with get_db_session() as session:
-            solicitudes = session.query(SolicitudVacaciones).filter(
-                SolicitudVacaciones.usuario_id == usuario_id,
+            solicitudes = session.query(SolicitudVacaciones).join(UsuarioHorario).filter(
+                UsuarioHorario.usuario_id == usuario_id,
                 SolicitudVacaciones.estatus == 2,  # Aprobada
                 SolicitudVacaciones.fecha_inicio <= fecha,
                 SolicitudVacaciones.fecha_fin >= fecha

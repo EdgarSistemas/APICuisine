@@ -355,4 +355,3 @@ def listar_modulos_activos():
             'error': 'INTERNAL_ERROR',
             'message': 'Error interno del servidor'
         })), 500
-

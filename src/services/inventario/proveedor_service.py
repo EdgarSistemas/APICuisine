@@ -88,8 +88,7 @@ class ProveedorService:
             proveedores = ProveedorDAO.obtener_todos_proveedores(solo_activos)
             return {
                 "success": True,
-                "data": proveedores,
-                "total": len(proveedores)
+                "data": proveedores
             }
             
         except Exception as e:

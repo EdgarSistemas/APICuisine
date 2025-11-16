@@ -1,0 +1,792 @@
+Project "db_cuisine" {
+  database_type: "SQLServer"
+  Note: 'Modelo unificado PWA y Móvil'
+}
+
+/*
+CREATE SCHEMA seguridad;
+CREATE SCHEMA catalogos;
+CREATE SCHEMA operaciones;
+CREATE SCHEMA inventario;
+CREATE SCHEMA pagos;
+CREATE SCHEMA marketing;
+CREATE SCHEMA config;
+CREATE SCHEMA auditoria;
+CREATE SCHEMA movil;
+*/
+
+//// =====================
+//  FLUJO A - Sucursales, Areas, Mesas, Asignaciones
+//// =====================
+Table catalogos.Sucursal {
+  id_sucursal int [pk, increment]
+  codigo_sucursal nvarchar(20) [not null, unique]
+  nombre nvarchar(100) [not null]
+  telefono nvarchar(15)
+  direccion nvarchar(100)
+  es_activa bit [not null, default: `1`]
+  created_at datetime2 [not null, default: `SYSUTCDATETIME()`]
+  updated_at datetime2
+}
+
+Table catalogos.Area {
+  id_area int [pk, not null, increment]
+  sucursal_id int [not null]
+  nombre nvarchar(50) [not null]
+  descripcion nvarchar(100)
+  es_activa bit [not null, default: `1`]
+  created_at datetime2 [not null, default: `SYSUTCDATETIME()`]
+}
+
+Table catalogos.Mesa {
+  id_mesa int [pk, increment]
+  sucursal_id int [not null]
+  area_id int [not null]
+  codigo_mesa nvarchar(20) [not null]
+  capacidad int [not null]
+  es_activa bit [not null, default: `1`]
+  created_at datetime2 [not null, default: `SYSUTCDATETIME()`]
+  updated_at datetime2
+
+  indexes {
+    (sucursal_id, codigo_mesa) [unique, name: 'UQ_Mesa_Sucursal_Codigo']
+    (sucursal_id, area_id)     [name: 'IX_Mesa_SucursalArea']
+  }
+}
+
+Table operaciones.AsignacionMesa {
+  id_asignacion_mesa bigint [pk, increment]
+  mesa_id int         [not null]
+  usuario_id bigint   [not null] // FK -> seguridad.Usuario (Mesero)
+  es_activa bit       [not null, default: `1`]
+
+  created_at datetime2 [not null, default: `SYSUTCDATETIME()`]
+  updated_at datetime2
+
+  indexes {
+    (mesa_id, usuario_id, es_activa) [unique, name: 'UX_AsigMesa_MesaUsuarioActiva']
+    (mesa_id, es_activa) [name: 'IX_AsigMesa_MesaActiva']
+    (usuario_id, es_activa)           [name: 'IX_AsigMesa_MeseroActivo']
+  }
+  Note: 'Permite varios meseros activos por mesa'
+}
+
+Ref: catalogos.Area.sucursal_id > catalogos.Sucursal.id_sucursal
+Ref: catalogos.Mesa.area_id > catalogos.Area.id_area
+Ref: operaciones.AsignacionMesa.mesa_id     > catalogos.Mesa.id_mesa
+Ref: operaciones.AsignacionMesa.usuario_id  > seguridad.Usuario.id_usuario
+
+//// =====================
+//  FLUJO B - Catálogo de menú, combos y recetas
+//// =====================
+Table catalogos.CategoriaMenu {
+  id_categoria int [pk, increment]
+  nombre nvarchar(30) [not null]
+  descripcion nvarchar(100)
+  es_activa bit [not null, default: `1`]
+  created_at datetime2 [not null, default: `SYSUTCDATETIME()`]
+  updated_at datetime2
+}
+
+Table catalogos.Producto {
+  id_producto bigint [pk, increment]
+  categoria_id int [not null]
+  codigo nvarchar(20)
+  nombre nvarchar(50) [not null]
+  descripcion nvarchar(100)
+  imagen_url nvarchar
+  precio decimal(12,2) [not null]
+  es_activo bit [not null, default: `1`]
+  created_at datetime2 [not null, default: `SYSUTCDATETIME()`]
+  updated_at datetime2
+
+  indexes {
+    (codigo) [unique, name: 'UQ_Producto_SKU']
+    (categoria_id, es_activo, nombre) [name: 'IX_Menu_CategoriaActivoNombre']
+  }
+}
+
+Table catalogos.Combo {
+  id_combo bigint [pk, increment]
+  nombre nvarchar(50) [not null]
+  descripcion nvarchar(100)
+  imagen_url nvarchar
+  precio decimal(12,2) [not null]
+  es_activo bit [not null, default: `1`]
+  created_at datetime2 [not null, default: `SYSUTCDATETIME()`]
+  updated_at datetime2
+}
+
+Table catalogos.ComboProducto {
+  id_combo_producto int [pk, increment]
+  combo_id int [not null]
+  producto_id gint [not null]
+  cantidad int [not null, default: `1`]
+  created_at datetime2 [not null, default: `SYSUTCDATETIME()`]
+  updated_at datetime2
+
+  indexes {
+    (combo_id, producto_id) [unique, name: 'UX_Combo_Producto_Unico']
+    (producto_id) [name: 'IX_ComboProducto_PorProducto']
+  }
+}
+
+Table catalogos.ProductoReceta {
+  id_receta bigint [pk, increment]
+  producto_id bigint [not null]
+  nombre nvarchar(120)
+  es_activa bit [not null, default: `1`]
+  created_at datetime2 [not null, default: `SYSUTCDATETIME()`]
+  updated_at datetime2
+
+  indexes {
+    (producto_id, es_activa) [name: 'IX_Receta_PorProductoActiva']
+  }
+  Note: 'Una receta activa por producto a la vez.'
+}
+
+Table catalogos.ProductoRecetaItem {
+  id_receta_item bigint [pk, increment]
+  receta_id bigint [not null]
+  insumo_id bigint [not null]
+  cantidad decimal(10,2) [not null]
+
+  indexes {
+    (receta_id, insumo_id) [unique, name: 'UX_Receta_Insumo']
+  }
+}
+
+Ref: catalogos.Producto.categoria_id > catalogos.CategoriaMenu.id_categoria
+Ref: catalogos.ComboProducto.combo_id > catalogos.Combo.id_combo
+Ref: catalogos.ComboProducto.producto_id > catalogos.Producto.id_producto
+Ref: catalogos.ProductoReceta.producto_id > catalogos.Producto.id_producto
+Ref: catalogos.ProductoRecetaItem.receta_id > catalogos.ProductoReceta.id_receta
+Ref: catalogos.ProductoRecetaItem.insumo_id > inventario.Insumo.id_insumo
+
+//// =====================
+//  FLUJO C - Seguridad, Roles y asignaciones
+//// =====================
+Table seguridad.Rol {
+  id_rol int [pk, increment]
+  nombre nvarchar(30) [not null, unique] // Administrador, Gerente, Cajero, Recepción, Mesero, Cocina, Limpieza, Almacen, Marketing, Cliente
+  descripcion nvarchar(100)
+}
+
+Table seguridad.Usuario {
+  id_usuario int [pk, increment]
+  email nvarchar(50) [not null, unique]
+  hash_password varbinary(256) [not null]
+  nombre nvarchar(50) [not null]
+  apellido nvarchar(30)
+  telefono nvarchar(30)
+  es_activo bit [not null, default: `1`]
+  es_cliente bit [not null, default: `0`]
+  acepta_marketing bit [not null, default: `0`]
+  tipo_acceso nvarchar(5)// 'pwa','mov','amb'
+  created_at datetime2 [not null, default: `SYSUTCDATETIME()`]
+  updated_at datetime2
+}
+
+Table seguridad.UsuarioRol {
+  id_usuario_rol int [pk, increment]
+  usuario_id int [not null]
+  rol_id int [not null]
+  indexes {
+    (usuario_id, rol_id) [unique, name: 'UX_Usuario_Rol']
+  }
+}
+
+Table seguridad.UsuarioSucursal {
+  id_usuario_sucursal int [pk, increment]
+  usuario_id int [not null]
+  sucursal_id int [not null]
+  indexes {
+    (usuario_id, sucursal_id) [unique, name: 'UX_Usuario_Sucursal']
+  }
+}
+
+Table seguridad.Modulo {
+  id_modulo int [pk, increment]
+  nombre nvarchar(30) [not null]
+  clave nvarchar(20) [not null, unique]
+  descripcion nvarchar(100)
+  es_activo bit [not null, default: `1`]
+  created_at datetime2 [not null, default: `SYSUTCDATETIME()`]
+  updated_at datetime2
+}
+
+Table seguridad.RolModulo {
+  id_rol_modulo bigint [pk, increment]
+  rol_id int [not null]
+  modulo_id int [not null]
+  habilitado bit [not null, default: `1`]
+  indexes {
+    (rol_id, modulo_id) [unique, name: 'UX_Rol_Modulo']
+  }
+}
+
+Ref: seguridad.UsuarioRol.usuario_id > seguridad.Usuario.id_usuario
+Ref: seguridad.UsuarioRol.rol_id > seguridad.Rol.id_rol
+Ref: seguridad.UsuarioSucursal.usuario_id > seguridad.Usuario.id_usuario
+Ref: seguridad.UsuarioSucursal.sucursal_id > catalogos.Sucursal.id_sucursal
+Ref: seguridad.RolModulo.rol_id > seguridad.Rol.id_rol
+Ref: seguridad.RolModulo.modulo_id > seguridad.Modulo.id_modulo
+
+//// =====================
+//  FLUJO D - Pedidos, items y estados
+//// =====================
+Table operaciones.Pedido {
+  id_pedido int [pk, increment]
+  sucursal_id int [not null]
+  folio nvarchar(20) [not null]
+  cliente_id int // FK -> seguridad.Usuario (cliente), puede ser null
+  tipo_pedido tinyint [not null] // 1=Mesa, 2=Pickup
+  canal tinyint [not null] // 1=PWA, 2=Móvil
+  reserva_id int
+  mesa_id int // si tipo=1; NULL si tipo=2
+  inicia_usuario_id int [not null] // quien abre (cliente o mesero)
+  estado_pedido tinyint   [not null] // 1=Creado,2=Confirmado,3=EnPreparacion,4=Listo,5=Entregado,6=Cancelado
+  notas nvarchar(100)
+  //subtotal decimal(12,2)  [not null, default: `0`]
+  //descuento_total decimal(12,2) [not null, default: `0`]
+  //total decimal(12,2)     [not null, default: `0`]
+  created_at datetime2    [not null, default: `SYSUTCDATETIME()`]
+  updated_at datetime2
+
+  indexes {
+    (sucursal_id, folio)    [unique, name: 'UQ_Pedido_Folio_Sucursal']
+    (sucursal_id, created_at) [name: 'IX_Pedido_SucursalFecha']
+    (estado_pedido)         [name: 'IX_Pedido_Estado']
+    (sucursal_id, mesa_id, estado_pedido) [name: 'IX_Pedido_MesaEstado']
+  }
+}
+
+Table operaciones.PedidoItem {
+  id_pedido_item int [pk, increment]
+  pedido_id int [not null]   // FK -> Pedido
+  producto_id int            // FK -> catalogos.Producto (si línea es producto)
+  combo_id int               // FK -> catalogos.Combo (si línea es combo)
+  cantidad int [not null, default: `1`]
+  precio_unit decimal(12,2) [not null]
+  // total_linea decimal(12,2) [not null]
+  notas nvarchar(100)
+  created_at datetime2 [not null, default: `SYSUTCDATETIME()`]
+  updated_at datetime2
+  rowversion rowversion
+  indexes {
+    (pedido_id) [name: 'IX_PedidoItem_Pedido']
+  }
+}
+
+Table operaciones.PedidoEstadoHist {
+  id_pedido_estado_hist int [pk, increment]
+  pedido_id int         [not null] // FK -> Pedido
+  estado_pedido tinyint    [not null]
+  usuario_id int // FK -> seguridad.Usuario (quién cambió)
+  created_at datetime2     [not null, default: `SYSUTCDATETIME()`]
+  comentario nvarchar(100)
+}
+
+Ref: operaciones.Pedido.sucursal_id - catalogos.Sucursal.id_sucursal
+Ref: operaciones.Pedido.cliente_id - seguridad.Usuario.id_usuario
+Ref: operaciones.Pedido.inicia_usuario_id  - seguridad.Usuario.id_usuario
+Ref: operaciones.Pedido.mesa_id - catalogos.Mesa.id_mesa
+Ref: operaciones.PedidoItem.pedido_id > operaciones.Pedido.id_pedido
+Ref: operaciones.PedidoItem.producto_id > catalogos.Producto.id_producto
+Ref: operaciones.PedidoItem.combo_id > catalogos.Combo.id_combo
+Ref: operaciones.PedidoEstadoHist.pedido_id > operaciones.Pedido.id_pedido
+Ref: operaciones.PedidoEstadoHist.usuario_id > seguridad.Usuario.id_usuario
+
+//// =====================
+//  FLUJO E - Inventario, existencias, compras, mermas y movimientos, usar fepo
+//// =====================
+Table inventario.UnidadMedida {
+  id_unidad int [pk, increment]
+  clave nvarchar(20) [not null, unique] // kg, g, l, ml, pz
+  nombre nvarchar(30) [not null]
+  created_at datetime2 [not null, default: `SYSUTCDATETIME()`]
+  updated_at datetime2
+}
+
+Table inventario.Insumo {
+  id_insumo bigint [pk, increment]
+  nombre nvarchar(30) [not null]
+  unidad_id int [not null] // FK -> UnidadMedida
+  es_activo bit [not null, default: `1`]
+  minimo_stock decimal(10,2) [not null, default: `0`]
+  created_at datetime2 [not null, default: `SYSUTCDATETIME()`]
+  updated_at datetime2
+}
+
+Table inventario.Existencia {
+  id_existencia int [pk, increment]
+  sucursal_id int [not null]
+  insumo_id int [not null] // FK -> inventario.Insumo
+  cantidad decimal(10,2)  [not null, default: `0`]
+  costo_promedio decimal(10,2) [not null, default: `0`] // MXN por unidad base
+  updated_at datetime2    [not null, default: `SYSUTCDATETIME()`]
+  rowversion rowversion // trazabilidad de concurrencia
+
+  indexes {
+    (sucursal_id, insumo_id) [unique, name: 'UX_Existencia_SucursalInsumo']
+  }
+}
+
+Table inventario.Proveedor {
+  id_proveedor bigint    [pk, increment]
+  nombre nvarchar(30)   [not null]
+  telefono nvarchar(15)
+  email nvarchar(50)
+  es_activo bit [not null, default: `1`]
+  created_at datetime2 [not null, default: `SYSUTCDATETIME()`]
+  updated_at datetime2
+}
+
+Table inventario.Compra {
+  id_compra bigint       [pk, increment]
+  usuario_id int [not null]
+  sucursal_id int        [not null] // FK -> catalogos.Sucursal
+  proveedor_id bigint    [not null] // FK -> inventario.Proveedor
+  folio nvarchar(20)     [not null]
+  fecha_compra datetime2 [not null, default: `SYSUTCDATETIME()`]
+  estatus tinyint        [not null, default: `1`] // 1=Registrada, 2=Cancelada, 3=Inventariada
+  created_at datetime2   [not null, default: `SYSUTCDATETIME()`]
+  updated_at datetime2
+  indexes {
+    (sucursal_id, folio) [unique, name: 'UX_Compra_Folio_Sucursal']
+  }
+}
+
+Table inventario.CompraDetalle {
+  id_compra_detalle int  [pk, increment]
+  compra_id int          [not null] // FK -> inventario.Compra
+  insumo_id int          [not null] // FK -> inventario.Insumo
+  cant_presentacion decimal(10,2) [not null] // ej. 5 costales
+  // unidades_por_present decimal(10,2) [not null]// ej. 50 kg por costal
+  costo_unit_present decimal(10,0) [not null] // MXN por presentación
+  created_at datetime2      [not null, default: `SYSUTCDATETIME()`]
+  updated_at datetime2
+}
+
+Table inventario.Recepcion {
+  id_recepcion int [pk, increment]
+  compra_id int // FK -> inventario.Compra
+  //sucursal_id int [not null] // FK -> catalogos.Sucursal
+  recibido_por int // FK -> seguridad.Usuario
+  fecha_recepcion datetime2 [not null, default: `SYSUTCDATETIME()`]
+  notas nvarchar(200)
+  estatus tinyint [not null, default: `1`] // 1=Registrada
+  created_at datetime2 [not null, default: `SYSUTCDATETIME()`]
+}
+
+Table inventario.RecepcionDetalle {
+  id_recepcion_det int [pk, increment]
+  recepcion_id int [not null] // FK -> inventario.Recepcion
+  // compra_detalle_id int // FK opcional -> inventario.CompraDetalle
+  insumo_id int [not null] // FK -> inventario.Insumo
+  cant_presentacion decimal(10,2) [not null]
+  unidades_por_present decimal(10,2) [not null]
+  cantidad_base decimal(10,2) [not null] // calculada: cant_presentacion * unidades_por_present
+  costo_unitario decimal(10,2) [not null] // por unidad base
+  notas nvarchar(200)
+  created_at datetime2 [not null, default: `SYSUTCDATETIME()`]
+}
+
+Table inventario.Lote {
+  id_lote int [pk, increment]
+  // sucursal_id int [not null] // FK -> catalogos.Sucursal
+  // insumo_id int [not null] // FK -> inventario.Insumo
+  det_recepcion_id int [not null] // FK -> inventario.RecepcionDetalle
+  lote nvarchar(20) // número de lote interno
+  lote_proveedor nvarchar(100) // número de lote del proveedor
+  cantidad_inicial decimal(10,2) [not null]
+  cantidad_disponible decimal(10,2) [not null]
+  costo_unitario decimal(10,2) [not null] // MXN por unidad base
+  fecha_caducidad datetime2
+  estado tinyint [not null, default: `1`] // 1=Disponible,2=Agotado
+  created_at datetime2 [not null, default: `SYSUTCDATETIME()`]
+  rowversion rowversion // trazabilidad de concurrencia
+
+  indexes {
+    //(insumo_id, fecha_caducidad) [name: 'IX_Lote_Caducidad']
+    //(sucursal_id, insumo_id) [name: 'IX_Lote_SucInsumo']
+  }
+}
+
+Table inventario.Movimiento {
+  id_movimiento int   [pk, increment]
+  sucursal_id int        [not null] // FK -> catalogos.Sucursal
+  insumo_id int       [not null] // FK -> inventario.Insumo
+  lote_id bigint // FK -> inventario.Lote
+  tipo_mov tinyint       [not null] // 1=Entrada, 2=Salida
+  motivo tinyint         [not null] // 1=Compra, 2=Receta/Consumo, 3=Merma
+  cantidad decimal(10,2) [not null]   // en unidad base
+  pedido_id bigint // FK opcional -> operaciones.Pedido
+  det_recepcion_id bigint // FK opcional -> inventario.RecepcionDetalle
+  compra_id int // FK opcional -> inventario.Compra
+  merma_id bigint // FK opcional -> inventario.Merma
+  usuario_id bigint // FK -> seguridad.Usuario
+  created_at datetime2   [not null, default: `SYSUTCDATETIME()`]
+  indexes {
+    (pedido_id) [name: 'IX_Mov_Pedido']
+    (det_recepcion_id) [name: 'IX_Mov_det_recepcion_id']
+  }
+}
+
+Table inventario.Merma {
+  id_merma bigint [pk, increment]
+  sucursal_id int [not null] // FK -> catalogos.Sucursal
+  insumo_id bigint [not null] // FK -> inventario.Insumo
+  cantidad decimal(10,2) [not null]
+  motivo nvarchar(200)
+  created_at datetime2 [not null, default: `SYSUTCDATETIME()`]
+}
+
+Ref: inventario.Insumo.unidad_id > inventario.UnidadMedida.id_unidad
+
+Ref: inventario.Existencia.sucursal_id > catalogos.Sucursal.id_sucursal
+Ref: inventario.Existencia.insumo_id - inventario.Insumo.id_insumo
+
+Ref: inventario.Compra.proveedor_id > inventario.Proveedor.id_proveedor
+Ref: inventario.Compra.usuario_id > seguridad.Usuario.id_usuario
+Ref: inventario.Compra.sucursal_id > catalogos.Sucursal.id_sucursal
+
+Ref: inventario.CompraDetalle.compra_id > inventario.Compra.id_compra
+Ref: inventario.CompraDetalle.insumo_id > inventario.Insumo.id_insumo
+
+Ref: inventario.Recepcion.compra_id > inventario.Compra.id_compra
+// Ref: inventario.Recepcion.sucursal_id > catalogos.Sucursal.id_sucursal
+Ref: inventario.Recepcion.recibido_por > seguridad.Usuario.id_usuario
+
+Ref: inventario.RecepcionDetalle.recepcion_id > inventario.Recepcion.id_recepcion
+Ref: inventario.RecepcionDetalle.insumo_id > inventario.Insumo.id_insumo
+
+// Ref: inventario.RecepcionDetalleLote.recepcion_det_id > inventario.RecepcionDetalle.id_recepcion_det
+// Ref: inventario.RecepcionDetalleLote.lote_id > inventario.Lote.id_lote
+
+Ref: inventario.RecepcionDetalle.id_recepcion_det - inventario.Lote.det_recepcion_id
+
+Ref: inventario.Movimiento.sucursal_id > catalogos.Sucursal.id_sucursal
+Ref: inventario.Movimiento.insumo_id > inventario.Insumo.id_insumo
+Ref: inventario.Movimiento.lote_id > inventario.Lote.id_lote
+Ref: inventario.Movimiento.pedido_id > operaciones.Pedido.id_pedido
+Ref: inventario.Movimiento.compra_id > inventario.Compra.id_compra
+Ref: inventario.Movimiento.merma_id > inventario.Merma.id_merma
+
+Ref: inventario.Merma.sucursal_id > catalogos.Sucursal.id_sucursal
+Ref: inventario.Merma.insumo_id > inventario.Insumo.id_insumo
+
+//// =====================
+//  FLUJO F - Pagos y métodos
+//// =====================
+Table pagos.Pago {
+  id_pago bigint        [pk, increment]
+  pedido_id bigint      [not null]   // FK -> operaciones.Pedido
+  sucursal_id int       [not null]
+
+  monto decimal(10,2)  [not null]
+  propina decimal(10,2) [not null, default: `0`]
+  moneda nvarchar(5)       [not null, default: `'MXN'`]
+  estatus tinyint      [not null, default: `1`]
+
+  usuario_id bigint
+  created_at datetime2  [not null, default: `SYSUTCDATETIME()`]
+  updated_at datetime2
+
+  indexes {
+    (pedido_id) [name: 'IX_Pago_Pedido']
+    (pedido_id, estatus) [name: 'IX_Pago_PedidoEstatus']
+    (sucursal_id, created_at) [name: 'IX_Pago_SucursalFecha']
+  }
+}
+
+
+Ref: pagos.Pago.pedido_id   > operaciones.Pedido.id_pedido
+Ref: pagos.Pago.sucursal_id > catalogos.Sucursal.id_sucursal
+Ref: pagos.Pago.usuario_id  > seguridad.Usuario.id_usuario
+
+//// =====================
+//  FLUJO G - Reservas y hold de mesas
+//// =====================
+Table operaciones.HoldMesa {
+  id_hold_mesa bigint [pk, increment]
+  //sucursal_id int     [not null] // FK -> catalogos.Sucursal
+  mesa_id int         [not null] // FK -> catalogos.Mesa
+  actor_tipo tinyint  [not null] // 1=Cliente, 2=Recepción
+  actor_usuario_id bigint // opcional: FK -> seguridad.Usuario (quien originó)
+  inicio datetime2    [not null] // ventana solicitada (inicio)
+  fin_estimado datetime2 [not null] // ventana solicitada (fin estimado)
+  expires_at datetime2 [not null] // TTL: cuando expira el hold
+  estatus tinyint     [not null, default: `1`] // 1=Activo,2=Confirmado,3=Expirado,4=Cancelado
+  notas nvarchar(300)
+  created_at datetime2 [not null, default: `SYSUTCDATETIME()`]
+  updated_at datetime2
+  rowversion rowversion
+
+  indexes {
+    (mesa_id, expires_at) [name: 'IX_HoldMesa_Expira']
+    (mesa_id, estatus)     [name: 'IX_HoldMesa_Estatus']
+  }
+}
+
+Table operaciones.Reserva {
+  id_reserva bigint [pk, increment]
+  //sucursal_id int     [not null]          // FK -> catalogos.Sucursal
+  //mesa_id int         [not null]          // FK -> catalogos.Mesa
+  cliente_id bigint   // FK -> seguridad.Usuario (cliente)
+  recepcionista_id bigint                  // FK -> seguridad.Usuario (si aplica)
+  inicio datetime2    [not null]
+  fin_estimado datetime2 [not null]
+  estatus tinyint     [not null, default: `1`] // 1=Programada,2=EnCurso,3=Completada,4=NoShow,5=Cancelada
+  tolerancia_min int                      // minutos para NoShow (nullable -> fallback config)
+  notas nvarchar(300)
+  hold_id bigint                          // FK opcional -> operaciones.HoldMesa (si se originó desde hold)
+  created_at datetime2 [not null, default: `SYSUTCDATETIME()`]
+  updated_at datetime2
+  rowversion rowversion
+
+  indexes {
+    (inicio, fin_estimado) [name: 'IX_Reserva_MesaRango']
+    (estatus, inicio)               [name: 'IX_Reserva_Busqueda']
+    (hold_id) [unique, name: 'UX_Reserva_Hold_Unico']
+  }
+}
+
+Ref: operaciones.HoldMesa.mesa_id > catalogos.Mesa.id_mesa
+Ref: operaciones.HoldMesa.actor_usuario_id > seguridad.Usuario.id_usuario
+
+Ref: operaciones.Reserva.cliente_id > seguridad.Usuario.id_usuario
+Ref: operaciones.Reserva.recepcionista_id > seguridad.Usuario.id_usuario
+Ref: operaciones.Reserva.hold_id > operaciones.HoldMesa.id_hold_mesa
+
+//// =====================
+//  FLUJO I - Configuración por sucursal
+//// =====================
+Table config.ConfigSucursal {
+  id_config bigint [pk, increment]
+  sucursal_id int // FK -> catalogos.Sucursal
+  clave nvarchar(30)     [not null]
+  valor_string nvarchar(300)
+  updated_at datetime2   [not null, default: `SYSUTCDATETIME()`]
+  rowversion rowversion
+
+  indexes {
+    (sucursal_id, clave) [unique, name: 'UX_ConfigSucursal_SucursalClave']
+  }
+}
+Ref: config.ConfigSucursal.sucursal_id > catalogos.Sucursal.id_sucursal
+
+//// =====================
+//  FLUJO K - Auditoría
+//// =====================
+Table auditoria.LogAccion {
+  id_log_accion bigint [pk, increment]
+  origen nvarchar(40)   [not null]  // 'PWA','Movil','API','Backoffice'
+  entidad nvarchar(120) [not null]  // 'Pedido','Pago','Reserva'
+  entidad_id nvarchar(80)           // id afectado (texto para flexibilidad)
+  accion nvarchar(40)   [not null]  // 'CREATE','UPDATE','DELETE','LOGIN'
+  usuario_id bigint                 // FK -> seguridad.Usuario
+  detalle_json nvarchar(max)        // cambios payload
+  created_at datetime2  [not null, default: `SYSUTCDATETIME()`]
+
+  indexes {
+    (created_at) [name: 'IX_LogAccion_Fecha']
+    (usuario_id, created_at) [name: 'IX_LogAccion_UsuarioFecha']
+    (entidad, accion, created_at) [name: 'IX_LogAccion_EntidadAccionFecha']
+  }
+  Note: 'Write-only; consultar por rango/usuario/entidad. Sin lógica en BD.'
+}
+
+Ref: auditoria.LogAccion.usuario_id > seguridad.Usuario.id_usuario
+
+//// =====================
+//  FLUJO L - Push tokens / móviles
+//// =====================
+Table movil.PushToken {
+  id_push_token bigint [pk, increment]
+  usuario_id bigint                // FK -> seguridad.Usuario
+  plataforma nvarchar(10) [not null] // 'android','web'
+  token nvarchar(255) [not null, unique]
+  es_activo bit [not null, default: `1`]
+  creado_en datetime2  [not null, default: `SYSUTCDATETIME()`]
+  actualizado_en datetime2
+  indexes {
+    (usuario_id, es_activo) [name: 'IX_PushToken_Usuario']
+    (plataforma, es_activo) [name: 'IX_PushToken_Plataforma']
+  }
+}
+
+Ref: movil.PushToken.usuario_id  > seguridad.Usuario.id_usuario
+
+//// =====================
+//  FLUJO M - Horarios, asistencia
+//// =====================
+Table rrhh.Horario {
+  id_horario int [pk, increment]
+  sucursal_id int                    // FK -> catalogos.Sucursal (NULL = global)
+  clave nvarchar(60) [not null, unique]  // p.ej. "TURNO_DIA_9_17"
+  nombre nvarchar(120) [not null]
+  descripcion nvarchar(300)
+  es_activo bit [not null, default: `1`]
+  created_at datetime2 [not null, default: `SYSUTCDATETIME()`]
+  updated_at datetime2
+}
+
+Table rrhh.HorarioDetalle {
+  id_detalle int [pk, increment]
+  horario_id int [not null]          // FK -> rrhh.Horario
+  dia_semana tinyint [not null]      // 1=Lunes .. 7=Domingo
+  hora_inicio time [not null]
+  hora_fin time [not null]
+  turno_idx tinyint [not null, default: `1`] // multi-franjas por día
+  tolerancia_min int [not null, default: `10`] // para validación on-time
+  es_activo bit [not null, default: `1`]
+  indexes {
+    (horario_id, dia_semana, turno_idx) [unique, name: 'UX_HorarioDetalle_Unico']
+  }
+}
+
+Table rrhh.UsuarioHorario {
+  id_usuario_horario bigint [pk, increment]
+  usuario_id bigint [not null]       // FK -> seguridad.Usuario
+  horario_id int [not null]          // FK -> rrhh.Horario
+  fecha_inicio date [not null]       // vigencia desde
+  fecha_fin date                     // vigencia hasta (NULL = indefinido)
+  es_recurring bit [not null, default: `1`] // 1 = aplica recurrentemente hasta fecha_fin
+  es_activo bit [not null, default: `1`]
+  created_at datetime2 [not null, default: `SYSUTCDATETIME()`]
+  updated_at datetime2
+  indexes {
+    (usuario_id, es_activo) [name: 'IX_UsuarioHorario_Activo']
+  }
+}
+
+Table rrhh.SolicitudVacaciones {
+  id_solicitud int [pk, not null, increment]
+  horario_usuario_id int [not null]
+  fecha_inicio date [not null]
+  fecha_fin date [not null]
+  motivo nvarchar(300)
+  estatus tinyint [default: 1] // 1 - registrada, 2 - aprobada, 3 - cancelada
+  created_at datetime2 [not null, default: `SYSUTCDATETIME()`]
+}
+
+Table rrhh.TurnoClave {
+  id_turno_clave bigint [pk, increment]
+  horario_id int [not null]          // FK -> rrhh.Horario
+  horario_detalle_id int             // FK -> rrhh.HorarioDetalle (franja)
+  sucursal_id int [not null]         // FK -> catalogos.Sucursal
+  fecha date [not null]              // fecha del turno (YYYY-MM-DD)
+  turno_idx tinyint [not null, default: `1`]
+  codigo nvarchar(32) [not null]     // código mostrado al staff
+  hash_codigo nvarchar(128)          // opcional: hash para verificación
+  es_activo bit [not null, default: `1`]
+  generado_por bigint                // FK -> seguridad.Usuario
+  generado_en datetime2 [not null, default: `SYSUTCDATETIME()`]
+  expira_en datetime2
+  uso_maximo int [not null, default: `0`] // 0 = ilimitado
+  usos_count int [not null, default: `0`]
+  notas nvarchar(300)
+  indexes {
+    (horario_id, fecha, turno_idx) [unique, name: 'UX_TurnoClave_HorarioFechaTurno']
+    (sucursal_id, fecha) [name: 'IX_TurnoClave_SucursalFecha']
+    (codigo) [name: 'IX_TurnoClave_Codigo']
+  }
+}
+
+Table rrhh.Asistencia {
+  id_asistencia bigint [pk, increment]
+  usuario_id bigint [not null]        // FK -> seguridad.Usuario
+  usuario_horario_id bigint           // FK opcional -> rrhh.UsuarioHorario
+  tipo_evento tinyint [not null]      // 1=Entrada,2=Salida
+  evento_ts datetime2 [not null]      // cuando ocurrió la marca
+  origen nvarchar(20)                 // 'movil','pwa','kiosk','api'
+  device_info nvarchar(300)
+  lat decimal(9,6)
+  lng decimal(9,6)
+  turno_clave_id bigint               // FK opcional -> rrhh.TurnoClave
+  codigo_usuario nvarchar(32)         // el codigo que el empleado ingresó
+  codigo_validado bit [not null, default: `0`] // 1 = válido vs TurnoClave
+  observaciones nvarchar(300)
+  created_at datetime2 [not null, default: `SYSUTCDATETIME()`]
+  indexes {
+    (usuario_id, evento_ts) [name: 'IX_Asistencia_UsuarioFecha']
+    (evento_ts) [name: 'IX_Asistencia_SucursalFecha']
+    (turno_clave_id) [name: 'IX_Asistencia_TurnoClave']
+  }
+}
+
+Ref: rrhh.Horario.sucursal_id > catalogos.Sucursal.id_sucursal
+Ref: rrhh.HorarioDetalle.horario_id > rrhh.Horario.id_horario
+Ref: rrhh.UsuarioHorario.usuario_id > seguridad.Usuario.id_usuario
+Ref: rrhh.UsuarioHorario.horario_id > rrhh.Horario.id_horario
+Ref: rrhh.TurnoClave.horario_detalle_id > rrhh.HorarioDetalle.id_detalle
+Ref: rrhh.TurnoClave.generado_por > seguridad.Usuario.id_usuario
+Ref: rrhh.Asistencia.usuario_id > seguridad.Usuario.id_usuario
+Ref: rrhh.Asistencia.usuario_horario_id > rrhh.UsuarioHorario.id_usuario_horario
+Ref: rrhh.Asistencia.turno_clave_id > rrhh.TurnoClave.id_turno_clave
+Ref: rrhh.UsuarioHorario.id_usuario_horario - rrhh.SolicitudVacaciones.horario_usuario_id
+
+//// =====================
+//  FLUJO N - Tickets y gestión de incidencias
+//// =====================
+Table ticket.Ticket {
+  id_ticket int [pk, increment, not null]
+  usuario_id int [not null] // FK -> seguridad.Usuario (empleado)
+  notas nvarchar(500)
+  imagen_url blob
+  estatus tinyint [not null, default: 1] // 1 - registrada, 2 - en proceso de solución, 3 - completada, 4 - cancelada
+  created_at datetime2 [not null, default: `SYSUTCDATETIME()`]
+}
+
+Ref: seguridad.Usuario.id_usuario > ticket.Ticket.usuario_id
+
+//// =====================
+//  FLUJO O - Mejoras y calificación de servicio
+//// =====================
+Table servicio.Calificacion {
+  id_calificacion int [pk, not null, increment]
+  pedido_id int [not null]
+  cliente_id int [not null] // FK -> seguridad.Usuario (cliente quien registra)
+  empleado_id int [not null] // FK -> seguridad.Usuario (mesero quien atiende)
+  notas nvarchar(300)
+  calificacion tinyint [not null] // calificación dada por el cliente, el maximo es 10
+  created_at datetime2 [not null, default: `SYSUTCDATETIME()`]
+  es_activo tinyint [not null, default: 1] // 1 - registrada, 2 - cancelada
+}
+
+Table servicio.Mejoras {
+  id_mejora int [pk, not null, increment]
+  cliente_id int [not null] // FK -> seguridad.Usuario (cliente que califica)
+  notas nvarchar(300)
+  created_at datetime2 [default: `SYSUTCDATETIME`]
+  estatus tinyint [not null, default: 1]
+}
+
+Ref: servicio.Calificacion.cliente_id < seguridad.Usuario.id_usuario
+Ref: servicio.Calificacion.pedido_id < operaciones.Pedido.id_pedido
+Ref: servicio.Mejoras.cliente_id < seguridad.Usuario.id_usuario
+
+//// =====================
+//  FLUJO P - Marketing CRM
+//// =====================
+Table marketing.Campania {
+  id_campania int [not null, pk, increment]
+  usuario_crea_id int [not null]
+  nombre_campania nvarchar2 [not null]
+  porcentaje_desc decimal(10,2) [not null]
+  created_at datetime2 [default: `SYSUTCDATETIME`]
+  estatus tinyint [not null, default: 1]
+}
+
+Table marketing.CampaniaUsuario {
+  id_campania_usuario int
+  cliente_id int [not null]
+  campania_id int [not null]
+  fecha_vigencia datetime2
+  created_at datetime2 [default: `SYSUTCDATETIME`]
+}
+
+Ref: marketing.Campania.usuario_crea_id > seguridad.Usuario.id_usuario
+Ref: marketing.CampaniaUsuario.campania_id > marketing.Campania.id_campania
+Ref: marketing.CampaniaUsuario.cliente_id - seguridad.Usuario.id_usuario

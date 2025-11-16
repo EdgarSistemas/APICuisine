@@ -41,7 +41,6 @@ class SolicitudVacacionesService:
                 }
             
             resultado = SolicitudVacacionesDAO.crear_solicitud(
-                usuario_id=usuario_id,
                 usuario_horario_id=horario_activo['id_usuario_horario'],
                 fecha_inicio=data['fecha_inicio'],
                 fecha_fin=data['fecha_fin'],
@@ -100,16 +99,16 @@ class SolicitudVacacionesService:
     
     
     @staticmethod
-    def aprobar_solicitud(id_solicitud: int, gerente_id: int, data: dict) -> dict:
+    def aprobar_solicitud(id_solicitud: int, gerente_id: int, data: dict = None) -> dict:
         """
         Aprobar solicitud de vacaciones.
         Solo gerente de sucursal puede aprobar.
         
-        Expected data:
-        {
-            "notas_gerente": "Aprobado por buen desempeño"  # Opcional
-        }
+        Expected data: {} (sin campos, solo para validación)
         """
+        if data is None:
+            data = {}
+            
         schema = AprobarVacacionesSchema()
         errors = schema.validate(data)
         if errors:
@@ -121,8 +120,7 @@ class SolicitudVacacionesService:
             
             resultado = SolicitudVacacionesDAO.aprobar_solicitud(
                 id_solicitud=id_solicitud,
-                revisado_por=gerente_id,
-                notas_gerente=data.get('notas_gerente')
+                revisado_por=gerente_id
             )
             
             if resultado['success']:
@@ -136,15 +134,15 @@ class SolicitudVacacionesService:
     
     
     @staticmethod
-    def rechazar_solicitud(id_solicitud: int, gerente_id: int, data: dict) -> dict:
+    def rechazar_solicitud(id_solicitud: int, gerente_id: int, data: dict = None) -> dict:
         """
         Rechazar solicitud de vacaciones.
         
-        Expected data:
-        {
-            "notas_gerente": "Período muy ocupado, intenta en otro mes"  # Recomendado
-        }
+        Expected data: {} (sin campos requeridos)
         """
+        if data is None:
+            data = {}
+            
         schema = AprobarVacacionesSchema()
         errors = schema.validate(data)
         if errors:
@@ -153,8 +151,7 @@ class SolicitudVacacionesService:
         try:
             resultado = SolicitudVacacionesDAO.rechazar_solicitud(
                 id_solicitud=id_solicitud,
-                revisado_por=gerente_id,
-                notas_gerente=data.get('notas_gerente', 'No especificado')
+                revisado_por=gerente_id
             )
             
             if resultado['success']:
@@ -180,7 +177,7 @@ class SolicitudVacacionesService:
     
     @staticmethod
     def verificar_vacaciones_activas(usuario_id: int, fecha: date = None) -> dict:
-        """Verificar si empleado tiene vacaciones activas"""
+        """Verificar si empleado tiene vacaciones activas en una fecha específica"""
         try:
             fecha = fecha or date.today()
             vacaciones = SolicitudVacacionesDAO.obtener_vacaciones_activas(usuario_id, fecha)

@@ -643,19 +643,18 @@ class AuthService:
         """
         try:
             # Verificar si el correo ya está registrado
-            if self.usuario_dao.obtener_por_email(email):
+            if not self.usuario_dao.obtener_por_email(email):
                 return {
                     'success': False,
                     'error': 'EMAIL_REGISTERED',
-                    'message': 'El correo ya está registrado'
+                    'message': 'El correo no está registrado'
                 }
 
             # Generar código de validación
             codigo = self.email_service.generar_codigo()
 
-            # Guardar código en la base de datos
-            expiracion = datetime.utcnow() + timedelta(minutes=10)  # Código válido por 10 minutos
-            resultado_bd = self.auth_dao.guardar_codigo_validacion(email, codigo, expiracion)
+            # Guardar código en la base de datos (el DAO maneja la timezone)
+            resultado_bd = self.auth_dao.guardar_codigo_validacion(email, codigo, None)
 
             if not resultado_bd:
                 return {
@@ -665,13 +664,28 @@ class AuthService:
                 }
 
             # Enviar email con el código
-            enviado = self.email_service.enviar_email(
-                destinatario=email,
-                asunto="Validación de correo electrónico",
-                cuerpo=f"Tu código de validación es: {codigo}"
+            enviado = self.email_service._enviar_email(
+                to_email=email,
+                subject="Validación de correo electrónico",
+                body=f"""
+                <html>
+                <body style="font-family: Arial, sans-serif;">
+                    <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
+                        <h2 style="color: #2c3e50;">Validación de correo electrónico</h2>
+                        <p>Tu código de validación es:</p>
+                        <div style="text-align: center; margin: 30px 0;">
+                            <span style="font-size: 32px; font-weight: bold; color: #e74c3c; letter-spacing: 5px;">
+                                {codigo}
+                            </span>
+                        </div>
+                        <p><strong>Este código expira en 10 minutos.</strong></p>
+                    </div>
+                </body>
+                </html>
+                """
             )
 
-            if enviado:
+            if enviado.get('success'):
                 logger.info(f"Código de validación enviado a {email}")
                 return {
                     'success': True,

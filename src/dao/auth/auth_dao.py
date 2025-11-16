@@ -6,9 +6,11 @@ import logging
 from typing import Optional, Dict, Any
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import joinedload
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from src.core.db.session_manager import get_db_session
-from src.models.auth import Usuario, Rol, CodigoReset, CodigoValidacion
+from src.models.auth import Usuario, Rol, CodigoReset
 
 logger = logging.getLogger(__name__)
 
@@ -159,20 +161,34 @@ class AuthDAO:
     
     # === MÉTODOS PARA CÓDIGOS DE RESET ===
     
-    def guardar_codigo_reset(self, usuario_id: int, codigo: str, expiracion) -> bool:
+    def guardar_codigo_reset(self, usuario_id: int, codigo: str, expiracion=None) -> bool:
         """
         Guardar código de reset en la base de datos
         
         Args:
             usuario_id: ID del usuario
             codigo: Código de 6 dígitos
-            expiracion: Datetime de expiración
+            expiracion: Datetime de expiración (opcional, se calcula automáticamente con timezone México)
             
         Returns:
             bool: True si se guardó correctamente
         """
         try:
             with get_db_session() as session:
+                # Usar timezone de México pero guardar como naive
+                tz_mexico = ZoneInfo("America/Mexico_City")
+                ahora_mexico_aware = datetime.now(tz_mexico)
+                ahora_mexico = ahora_mexico_aware.replace(tzinfo=None)
+                
+                # Si no se proporciona expiración, calcularla (15 minutos)
+                if expiracion is None:
+                    expiracion = ahora_mexico + timedelta(minutes=15)
+                elif hasattr(expiracion, 'tzinfo') and expiracion.tzinfo is not None:
+                    # Si viene con timezone, convertir a naive
+                    expiracion = expiracion.replace(tzinfo=None)
+                
+                logger.info(f"Guardando código reset con expiracion: {expiracion} (hora México naive)")
+                
                 # Invalidar códigos anteriores del usuario
                 session.query(CodigoReset)\
                     .filter(CodigoReset.usuario_id == usuario_id)\
@@ -183,81 +199,136 @@ class AuthDAO:
                 nuevo_codigo = CodigoReset(
                     usuario_id=usuario_id,
                     codigo=codigo,
-                    expiracion=expiracion,
+                    expiracion=expiracion,  # Naive datetime
                     usado=False
                 )
                 
                 session.add(nuevo_codigo)
                 session.commit()
                 
-                logger.info(f"Código de reset guardado para usuario {usuario_id}")
+                logger.info(f"Código de reset guardado para usuario {usuario_id} (hora México: {ahora_mexico})")
                 return True
                 
         except SQLAlchemyError as e:
             logger.error(f"Error al guardar código de reset: {str(e)}")
             return False
     
-    def verificar_codigo_reset(self, usuario_id: int, codigo: str) -> Dict[str, Any]:
+    def verificar_codigo_validacion(self, email: str, codigo: str) -> bool:
         """
-        Verificar código de reset
+        Verificar código de validación por email.
+        Busca el usuario por email y verifica el código en codigo_reset.
         
         Args:
-            usuario_id: ID del usuario
+            email: Correo electrónico del usuario
             codigo: Código a verificar
             
         Returns:
-            Dict con resultado de la verificación
+            bool: True si el código es válido, False en caso contrario
+        """
+        try:
+            with get_db_session() as session:
+                # Buscar el usuario por email
+                usuario = session.query(Usuario).filter(Usuario.email == email).first()
+                
+                if not usuario:
+                    logger.warning(f"Usuario con email {email} no encontrado")
+                    return False
+                
+                # Usar timezone de México - convertir a naive para comparar con BD
+                tz_mexico = ZoneInfo("America/Mexico_City")
+                ahora_mexico_aware = datetime.now(tz_mexico)
+                ahora_mexico = ahora_mexico_aware.replace(tzinfo=None)  # Convertir a naive
+                
+                logger.info(f"Verificando código para usuario {usuario.id_usuario} - Hora actual México: {ahora_mexico}")
+                
+                # Buscar código válido
+                codigo_obj = session.query(CodigoReset).filter(
+                        CodigoReset.usuario_id == usuario.id_usuario,
+                        CodigoReset.codigo == codigo,
+                        CodigoReset.usado == False,
+                        CodigoReset.expiracion > ahora_mexico
+                    ).first()
+                
+                if codigo_obj:
+                    minutos_restantes = (codigo_obj.expiracion - ahora_mexico).total_seconds() / 60
+                    logger.info(f"✓ Código válido encontrado - Expira: {codigo_obj.expiracion} (quedan {minutos_restantes:.1f} min)")
+                    return True
+                
+                # Si no es válido, buscar por qué
+                codigo_cualquiera = session.query(CodigoReset).filter(
+                        CodigoReset.usuario_id == usuario.id_usuario,
+                        CodigoReset.codigo == codigo
+                    ).first()
+                
+                if not codigo_cualquiera:
+                    logger.warning(f"✗ Código '{codigo}' NO EXISTE en la BD para usuario {usuario.id_usuario}")
+                elif codigo_cualquiera.usado:
+                    logger.warning(f"✗ Código '{codigo}' YA FUE USADO")
+                elif codigo_cualquiera.expiracion <= ahora_mexico:
+                    logger.warning(f"✗ Código '{codigo}' EXPIRADO - Era válido hasta: {codigo_cualquiera.expiracion}, ahora son: {ahora_mexico}")
+                else:
+                    logger.warning(f"✗ Código '{codigo}' inválido por razón desconocida")
+                
+                return False
+                    
+        except SQLAlchemyError as e:
+            logger.error(f"Error al verificar código de validación: {str(e)}")
+            return False
+    
+    def verificar_codigo_reset(self, usuario_id: int, codigo: str) -> Dict[str, Any]:
+        """
+        Verificar si un código de reset es válido
+        
+        Args:
+            usuario_id: ID del usuario
+            codigo: Código de 6 dígitos
+            
+        Returns:
+            Dict con 'valido' (bool) y 'mensaje' (str)
         """
         try:
             with get_db_session() as session:
                 from datetime import datetime
+                from zoneinfo import ZoneInfo
                 
-                ahora = datetime.utcnow()  # Usar UTC para consistencia con BD
+                # Convertir a naive para comparar con BD
+                tz_mexico = ZoneInfo("America/Mexico_City")
+                ahora_mexico_aware = datetime.now(tz_mexico)
+                ahora_mexico = ahora_mexico_aware.replace(tzinfo=None)
                 
-                codigo_obj = session.query(CodigoReset)\
-                    .filter(
-                        CodigoReset.usuario_id == usuario_id,
-                        CodigoReset.codigo == codigo,
-                        CodigoReset.usado == False,
-                        CodigoReset.expiracion > ahora
-                    ).first()
+                codigo_obj = session.query(CodigoReset).filter(
+                    CodigoReset.usuario_id == usuario_id,
+                    CodigoReset.codigo == codigo,
+                    CodigoReset.usado == False,
+                    CodigoReset.expiracion > ahora_mexico
+                ).first()
                 
                 if codigo_obj:
-                    logger.info(f"Código válido encontrado para usuario {usuario_id} - Expira: {codigo_obj.expiracion} UTC, Ahora: {ahora} UTC")
-                    return {
-                        'valido': True,
-                        'mensaje': 'Código válido'
-                    }
-                else:
-                    # Verificar si existe pero está expirado o usado
-                    codigo_existente = session.query(CodigoReset)\
-                        .filter(
-                            CodigoReset.usuario_id == usuario_id,
-                            CodigoReset.codigo == codigo
-                        ).first()
-                    
-                    if codigo_existente:
-                        if codigo_existente.usado:
-                            mensaje = 'Código ya utilizado'
-                            logger.warning(f"Código ya usado para usuario {usuario_id}")
-                        else:
-                            mensaje = f'Código expirado (exp: {codigo_existente.expiracion} UTC, ahora: {ahora} UTC)'
-                            logger.warning(f"Código expirado para usuario {usuario_id}: {codigo_existente.expiracion} vs {ahora}")
+                    logger.info(f"Código reset válido para usuario {usuario_id}")
+                    return {'valido': True, 'mensaje': 'Código válido'}
+                
+                # Buscar si existe para dar mensaje más específico
+                codigo_existente = session.query(CodigoReset).filter(
+                    CodigoReset.usuario_id == usuario_id,
+                    CodigoReset.codigo == codigo
+                ).first()
+                
+                if codigo_existente:
+                    if codigo_existente.usado:
+                        mensaje = 'Código ya utilizado'
+                        logger.warning(f"Código reset ya usado para usuario {usuario_id}")
                     else:
-                        mensaje = 'Código inválido'
-                        logger.warning(f"Código no encontrado para usuario {usuario_id}")
-                    
-                    return {
-                        'valido': False,
-                        'mensaje': mensaje
-                    }
+                        mensaje = 'Código expirado'
+                        logger.warning(f"Código reset expirado para usuario {usuario_id}")
+                else:
+                    mensaje = 'Código inválido'
+                    logger.warning(f"Código reset no encontrado para usuario {usuario_id}")
+                
+                return {'valido': False, 'mensaje': mensaje}
                 
         except SQLAlchemyError as e:
-            logger.error(f"Error al verificar código de reset: {str(e)}")
-            return {
-                'valido': False,
-                'mensaje': 'Error interno'
-            }
+            logger.error(f"Error al verificar código reset: {str(e)}")
+            return {'valido': False, 'mensaje': 'Error interno'}
     
     def invalidar_codigo_reset(self, usuario_id: int) -> bool:
         """
@@ -292,39 +363,55 @@ class AuthDAO:
             return False
     
     # === MÉTODOS PARA CÓDIGOS DE VALIDACIÓN ===
-    
-    def guardar_codigo_validacion(self, email: str, codigo: str, expiracion) -> bool:
+
+    def guardar_codigo_validacion(self, email: str, codigo: str, creado_en) -> bool:
         """
-        Guardar código de validación de correo en la base de datos
+        Guardar código de validación de correo en codigo_reset.
+        Busca el usuario por email y guarda en la misma tabla codigo_reset.
 
         Args:
             email: Correo electrónico
             codigo: Código de validación
-            expiracion: Fecha y hora de expiración
+            creado_en: No usado (se calcula automáticamente con timezone México)
 
         Returns:
             bool: True si se guardó correctamente
         """
         try:
             with get_db_session() as session:
-                # Invalidar códigos anteriores para el mismo correo
-                session.query(CodigoValidacion)\
-                    .filter(CodigoValidacion.email == email)\
-                    .filter(CodigoValidacion.usado == False)\
-                    .update({CodigoValidacion.usado: True})
-
-                # Crear nuevo código
-                nuevo_codigo = CodigoValidacion(
-                    email=email,
+                # Buscar el usuario por email
+                usuario = session.query(Usuario).filter(Usuario.email == email).first()
+                
+                if not usuario:
+                    logger.error(f"Usuario con email {email} no encontrado")
+                    return False
+                
+                # Usar timezone de México pero guardar como naive en BD
+                tz_mexico = ZoneInfo("America/Mexico_City")
+                ahora_mexico_aware = datetime.now(tz_mexico)
+                ahora_mexico = ahora_mexico_aware.replace(tzinfo=None)  # Convertir a naive
+                expiracion = ahora_mexico + timedelta(minutes=10)
+                
+                logger.info(f"Guardando código con expiracion: {expiracion} (hora México naive)")
+                
+                # Invalidar códigos anteriores del usuario
+                session.query(CodigoReset)\
+                    .filter(CodigoReset.usuario_id == usuario.id_usuario)\
+                    .filter(CodigoReset.usado == False)\
+                    .update({CodigoReset.usado: True})
+                
+                # Crear nuevo código en codigo_reset
+                nuevo_codigo = CodigoReset(
+                    usuario_id=usuario.id_usuario,
                     codigo=codigo,
-                    expiracion=expiracion,
+                    expiracion=expiracion,  # Naive datetime
                     usado=False
                 )
-
+                
                 session.add(nuevo_codigo)
                 session.commit()
-
-                logger.info(f"Código de validación guardado para correo {email}")
+                
+                logger.info(f"Código de validación guardado en codigo_reset para usuario {usuario.id_usuario} (hora México: {ahora_mexico})")
                 return True
 
         except SQLAlchemyError as e:

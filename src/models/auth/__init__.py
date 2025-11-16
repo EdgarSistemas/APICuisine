@@ -9,7 +9,6 @@ from .rol import Rol
 from .modulo import Modulo
 from .push_token_model import PushToken
 from .codigo_reset import CodigoReset
-from .codigo_validacion import CodigoValidacion
 
 # Modelos de relación
 from .usuario_rol import UsuarioRol
@@ -26,7 +25,6 @@ __all__ = [
     'Modulo',
     'PushToken',
     'CodigoReset',
-    'CodigoValidacion',
     'UsuarioRol',
     'UsuarioSucursal',
     'RolModulo',

@@ -185,19 +185,6 @@ def listar_usuarios():
             'success': True,
             'data': usuarios
         }), 200
-        search = request.args.get('search', '')
-
-        # Listar usuarios
-        resultado = usuario_service.listar_usuarios(
-            page=page,
-            per_page=per_page,
-            search=search
-        )
-
-        if resultado['success']:
-            return jsonify(resultado['data']), 200
-        else:
-            return jsonify(error_schema.dump(resultado)), 500
 
     except Exception as e:
         logger.error(f"Error al listar usuarios: {str(e)}")
