@@ -85,7 +85,7 @@ class AuthService:
         """
         try:
             # Obtener usuario por email con password
-            usuario = self.auth_dao.obtener_usuario_por_email(email)
+            usuario = self.auth_dao.obtener_usuario_por_email(email, plataforma)
             
             if not usuario:
                 logger.warning(f"Usuario no encontrado: {email}")
@@ -703,7 +703,7 @@ class AuthService:
             return {
                 'success': False,
                 'error': 'INTERNAL_ERROR',
-                'message': 'Error interno al procesar la solicitud'
+                'message': f'Error interno al procesar la solicitud {e}'
             }
 
     def verificar_codigo_validacion(self, email: str, codigo: str) -> Dict[str, Any]:

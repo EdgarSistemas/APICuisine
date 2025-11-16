@@ -165,25 +165,47 @@ def crear_cliente():
 @jwt_required()
 def listar_usuarios():
     """
-    Listar usuarios
+    Listar usuarios según rol del usuario autenticado
     ---
     tags:
       - Usuarios
     security:
       - Bearer: []
+    description: |
+      - ADMIN: Retorna todos los usuarios activos (empleados y clientes)
+      - GERENTE: Retorna usuarios de su sucursal (empleados y clientes)
+      - OTROS: Acceso denegado
     responses:
       200:
-        description: Lista de usuarios
+        description: Lista de usuarios filtrada según rol
+      403:
+        description: Acceso denegado (rol no permitido)
       401:
         description: No autorizado
     """
     try:
-        # Obtener usuarios sin paginación
-        usuarios = usuario_service.listar_usuarios()
+        # Obtener datos del usuario autenticado
+        current_user = get_jwt_identity()
+        jwt_claims = get_jwt()
+        
+        usuario_id = current_user
+        roles = jwt_claims.get('roles', [])
+        
+        logger.info(f"Usuario {usuario_id} con roles {roles} solicita listar usuarios")
+        
+        # Llamar al service con los datos del usuario autenticado
+        resultado = usuario_service.listar_usuarios_con_filtro(
+            usuario_id=usuario_id,
+            roles=roles
+        )
+        
+        if not resultado['success']:
+            return jsonify(resultado), 403
 
         return jsonify({
             'success': True,
-            'data': usuarios
+            'data': resultado['usuarios'],
+            'total': len(resultado['usuarios'])
         }), 200
 
     except Exception as e:

@@ -241,6 +241,111 @@ class UsuarioService:
             logger.error(f"Error al listar usuarios: {str(e)}")
             raise
     
+    def listar_usuarios_con_filtro(self, usuario_id: int, roles: List[str]) -> Dict[str, Any]:
+        """
+        Listar usuarios con filtro según el rol del usuario autenticado
+        
+        Args:
+            usuario_id: ID del usuario autenticado
+            roles: Lista de nombres de roles del usuario
+            
+        Returns:
+            Dict con success, usuarios y mensaje
+        """
+        try:
+            # Verificar rol del usuario autenticado
+            rol_normalizado = roles[0].upper() if roles else ''
+            
+            # ADMIN: Todos los usuarios activos
+            if 'ADMIN' in rol_normalizado or 'ADMINISTRADOR' in rol_normalizado:
+                logger.info(f"ADMIN {usuario_id} listando todos los usuarios")
+                usuarios = self.usuario_dao.listar_usuarios({'es_activo': True})
+                usuarios_respuesta = self._preparar_usuarios_respuesta(usuarios)
+                return {
+                    'success': True,
+                    'usuarios': usuarios_respuesta,
+                    'message': 'Todos los usuarios activos'
+                }
+            
+            # GERENTE: Solo usuarios de su sucursal
+            elif 'GERENTE' in rol_normalizado:
+                logger.info(f"GERENTE {usuario_id} listando usuarios de su sucursal")
+                # Obtener sucursal del gerente
+                gerente = self.usuario_dao.obtener_por_id(usuario_id)
+                if not gerente:
+                    return {
+                        'success': False,
+                        'usuarios': [],
+                        'message': 'Gerente no encontrado'
+                    }
+                
+                # Obtener sucursales asignadas
+                sucursales = gerente.get('sucursales', [])
+                if not sucursales:
+                    logger.warning(f"GERENTE {usuario_id} sin sucursales asignadas")
+                    return {
+                        'success': False,
+                        'usuarios': [],
+                        'message': 'Gerente sin sucursales asignadas'
+                    }
+                
+                # Usar la primera sucursal asignada
+                sucursal_id = sucursales[0]['id_sucursal']
+                logger.info(f"GERENTE {usuario_id} listando usuarios de sucursal {sucursal_id}")
+                
+                # Listar usuarios de esa sucursal (empleados y clientes activos)
+                filtros = {
+                    'sucursal_id': sucursal_id,
+                    'es_activo': True
+                }
+                usuarios = self.usuario_dao.listar_usuarios(filtros)
+                usuarios_respuesta = self._preparar_usuarios_respuesta(usuarios)
+                
+                return {
+                    'success': True,
+                    'usuarios': usuarios_respuesta,
+                    'message': f'Usuarios de sucursal {sucursal_id}'
+                }
+            
+            # OTROS ROLES: Acceso denegado
+            else:
+                logger.warning(f"Usuario {usuario_id} con rol {rol_normalizado} intentó listar usuarios - ACCESO DENEGADO")
+                return {
+                    'success': False,
+                    'usuarios': [],
+                    'message': f'Acceso denegado. Solo ADMIN y GERENTE pueden listar usuarios. Rol actual: {rol_normalizado}'
+                }
+                
+        except Exception as e:
+            logger.error(f"Error al listar usuarios con filtro: {str(e)}")
+            return {
+                'success': False,
+                'usuarios': [],
+                'message': f'Error interno: {str(e)}'
+            }
+    
+    def _preparar_usuarios_respuesta(self, usuarios: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Preparar usuarios para la respuesta (agregar módulos y datos completos)
+        
+        Args:
+            usuarios: Lista de usuarios del DAO
+            
+        Returns:
+            Lista de usuarios preparados para respuesta
+        """
+        usuarios_respuesta = []
+        for usuario in usuarios:
+            # Agregar módulos para cada usuario
+            modulos = self.usuario_dao.obtener_modulos_usuario(usuario['id_usuario'])
+            usuario['modulos'] = modulos
+            
+            # Preparar respuesta completa
+            usuario_completo = self.preparar_respuesta_usuario(usuario)
+            usuarios_respuesta.append(usuario_completo)
+        
+        return usuarios_respuesta
+    
     def crear_empleado(self, datos: Dict[str, Any]) -> Dict[str, Any]:
         """
         Crear usuario empleado con rol y sucursal específicos

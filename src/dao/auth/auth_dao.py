@@ -4,6 +4,7 @@ Auth DAO - Acceso a datos de autenticación usando modelos declarativos
 
 import logging
 from typing import Optional, Dict, Any
+from sqlalchemy import and_, or_
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import joinedload
 from datetime import datetime, timedelta
@@ -46,7 +47,7 @@ class AuthDAO:
             logger.error(f"Error al autenticar usuario {email}: {str(e)}")
             raise RuntimeError(f"Error en base de datos: {str(e)}")
     
-    def obtener_usuario_por_email(self, email: str) -> Optional[Dict[str, Any]]:
+    def obtener_usuario_por_email(self, email: str, plataforma: str) -> Optional[Dict[str, Any]]:
         """
         Obtener usuario por email para validación
         
@@ -68,17 +69,30 @@ class AuthDAO:
                 
                 # Obtener roles del usuario mediante join manual
                 from src.models.auth import Rol, UsuarioRol
-                roles = session.query(Rol)\
-                    .join(UsuarioRol, Rol.id_rol == UsuarioRol.rol_id)\
-                    .filter(UsuarioRol.usuario_id == usuario.id_usuario)\
-                    .all()
+                roles = session.query(Rol).join(UsuarioRol, Rol.id_rol == UsuarioRol.rol_id).filter(UsuarioRol.usuario_id == usuario.id_usuario).all()
                 
-                # Obtener módulos del usuario mediante join manual  
+                # Obtener módulos del usuario mediante join manual
+                # 1 pwa
+                # 2 movil
+                # 3 ambos
+                # verificar de que plataforma viene la peticion y filtrar en la tabla RolModulo
                 from src.models.auth import Modulo, RolModulo
                 modulos = session.query(Modulo)\
                     .join(RolModulo, Modulo.id_modulo == RolModulo.modulo_id)\
                     .join(UsuarioRol, RolModulo.rol_id == UsuarioRol.rol_id)\
                     .filter(UsuarioRol.usuario_id == usuario.id_usuario)\
+                    .filter(
+                        or_(
+                            and_(
+                                plataforma == 'web',
+                                or_(RolModulo.plataforma == 1, RolModulo.plataforma == 3)
+                            ),
+                            and_(
+                                plataforma == 'movil',
+                                or_(RolModulo.plataforma == 2, RolModulo.plataforma == 3)
+                            )
+                        )
+                    )\
                     .filter(RolModulo.habilitado == True)\
                     .filter(Modulo.es_activo == True)\
                     .all()
