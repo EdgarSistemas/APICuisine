@@ -360,16 +360,24 @@ class HorarioDAO:
     
     
     @staticmethod
-    def generar_codigos_turno_dia(fecha_generacion: date = None, expira_horas: int = 2) -> dict:
+    def generar_codigos_turno_dia(fecha_generacion: date = None, expira_horas: int = 2, tz_mexico=None) -> dict:
         """
-        Genera códigos de turno para todos los horarios activos del día especificado.
+        Genera códigos de turno para todos los horarios activos del día especificado usando timezone de México.
         Por cada HorarioDetalle que coincida con el día de la semana, crea un TurnoClave.
         """
+        from zoneinfo import ZoneInfo
+        
+        if not tz_mexico:
+            tz_mexico = ZoneInfo("America/Mexico_City")
+        
         if not fecha_generacion:
-            fecha_generacion = date.today()
+            # Usar fecha de México
+            fecha_generacion = datetime.now(tz_mexico).date()
         
         # Obtener día de la semana (1=Lunes, 7=Domingo)
         dia_semana = fecha_generacion.isoweekday()
+        
+        logger.info(f"Generando códigos para fecha México: {fecha_generacion} (día {dia_semana})")
         
         with get_db_session() as session:
             # Buscar todos los HorarioDetalle activos que correspondan al día de hoy
@@ -380,6 +388,8 @@ class HorarioDAO:
                 HorarioDetalle.es_activo == True,
                 Horario.es_activo == True
             ).all()
+            
+            logger.info(f"Encontrados {len(detalles_hoy)} detalles para día {dia_semana}")
             
             codigos_generados = []
             codigos_existentes = []
@@ -398,18 +408,27 @@ class HorarioDAO:
                         "horario_id": codigo_existente.horario_id,
                         "horario_detalle_id": codigo_existente.horario_detalle_id,
                         "codigo": codigo_existente.codigo,
-                        "fecha": codigo_existente.fecha,
+                        "fecha": codigo_existente.fecha.isoformat(),
+                        "expira_en": codigo_existente.expira_en.isoformat() if codigo_existente.expira_en else None,
                         "ya_existia": True
                     })
+                    logger.info(f"Código ya existe para detalle {detalle.id_detalle}: {codigo_existente.codigo}")
                     continue
                 
                 # Generar código alfanumérico de 6 caracteres
                 codigo = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
                 
-                # Calcular hora de expiración (hora_inicio del turno + expira_horas)
-                hora_expiracion = datetime.combine(fecha_generacion, detalle.hora_inicio) + timedelta(hours=expira_horas)
+                # Calcular hora de expiración (hora_inicio del turno + expira_horas) en timezone México
+                # Combinar fecha + hora_inicio
+                dt_inicio = datetime.combine(fecha_generacion, detalle.hora_inicio)
+                # Crear datetime con timezone México
+                dt_inicio_mexico = dt_inicio.replace(tzinfo=tz_mexico)
+                # Agregar horas de expiración
+                hora_expiracion = dt_inicio_mexico + timedelta(hours=expira_horas)
+                # Guardar como naive (sin timezone) en BD
+                hora_expiracion_naive = hora_expiracion.replace(tzinfo=None)
                 
-                # Crear TurnoClave
+                # Crear TurnoClave con datetime naive
                 turno_clave = TurnoClave(
                     horario_id=detalle.horario_id,
                     horario_detalle_id=detalle.id_detalle,
@@ -418,13 +437,15 @@ class HorarioDAO:
                     turno_idx=detalle.turno_idx,
                     codigo=codigo,
                     es_activo=True,
-                    expira_en=hora_expiracion,
+                    expira_en=hora_expiracion_naive,  # Guardar como naive
                     uso_maximo=0,  # ilimitado
                     usos_count=0
                 )
                 
                 session.add(turno_clave)
                 session.flush()
+                
+                logger.info(f"Código creado: {codigo} para detalle {detalle.id_detalle}, expira: {hora_expiracion_naive}")
                 
                 codigos_generados.append({
                     "id_turno_clave": turno_clave.id_turno_clave,
@@ -440,11 +461,12 @@ class HorarioDAO:
             
             session.commit()
             
-            logger.info(f"Códigos generados para {fecha_generacion}: {len(codigos_generados)} nuevos, {len(codigos_existentes)} ya existían")
+            logger.info(f"Códigos generados para {fecha_generacion} (México): {len(codigos_generados)} nuevos, {len(codigos_existentes)} ya existían")
             
             return {
                 "fecha": fecha_generacion.isoformat(),
                 "dia_semana": dia_semana,
+                "timezone": "America/Mexico_City",
                 "codigos_generados": codigos_generados,
                 "codigos_existentes": codigos_existentes,
                 "total_codigos": len(codigos_generados) + len(codigos_existentes)

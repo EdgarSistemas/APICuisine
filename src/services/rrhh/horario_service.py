@@ -280,19 +280,25 @@ class HorarioService:
     @staticmethod
     def generar_codigos_turno(fecha_generacion: str = None, expira_horas: int = 2) -> tuple:
         """
-        Genera códigos de turno para el día especificado.
-        Si no se especifica fecha, usa hoy.
+        Genera códigos de turno para el día especificado usando timezone de México.
+        Si no se especifica fecha, usa hoy en zona de México.
         """
         try:
+            from zoneinfo import ZoneInfo
+            
+            # Obtener fecha actual en timezone de México
+            tz_mexico = ZoneInfo("America/Mexico_City")
+            
             # Parsear fecha si viene como string
             if fecha_generacion:
                 fecha = datetime.strptime(fecha_generacion, '%Y-%m-%d').date()
             else:
-                fecha = date.today()
+                # Usar fecha de México, no UTC
+                fecha = datetime.now(tz_mexico).date()
             
-            logger.info(f"Generando códigos para fecha: {fecha}")
+            logger.info(f"Generando códigos para fecha (México): {fecha}")
             
-            resultado = HorarioDAO.generar_codigos_turno_dia(fecha, expira_horas)
+            resultado = HorarioDAO.generar_codigos_turno_dia(fecha, expira_horas, tz_mexico=tz_mexico)
             
             if not resultado:
                 return {"error": "No se pudieron generar códigos"}, 500

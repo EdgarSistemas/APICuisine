@@ -15,7 +15,7 @@ class InsumoService:
     """Business logic para Insumo"""
     
     @staticmethod
-    def crear_insumo(usuario_id: int, nombre: str, unidad_id: int) -> dict:
+    def crear_insumo(usuario_id: int, nombre: str, minimo_stock: float, unidad_id: int) -> dict:
         """
         Crear nuevo insumo.
         Solo ADMIN puede crear.
@@ -23,6 +23,7 @@ class InsumoService:
         Args:
             usuario_id: ID del usuario autenticado
             nombre: Nombre del insumo
+            minimo_stock: Mínimo stock del insumo
             unidad_id: ID de la unidad de medida
             
         Returns:
@@ -40,7 +41,7 @@ class InsumoService:
                 return {"success": False, "error": f"Unidad de medida {unidad_id} no existe"}
             
             # CREAR
-            insumo = InsumoDAO.crear_insumo(nombre, unidad_id)
+            insumo = InsumoDAO.crear_insumo(nombre, minimo_stock, unidad_id)
             
             logger.info(f"Admin {usuario_id} creó insumo: {nombre}")
             return {
@@ -148,7 +149,7 @@ class InsumoService:
     
     
     @staticmethod
-    def actualizar_insumo(usuario_id: int, insumo_id: int, nombre: str = None) -> dict:
+    def actualizar_insumo(usuario_id: int, insumo_id: int, nombre: str = None, minimo_stock: float = None) -> dict:
         """
         Actualizar insumo.
         Solo ADMIN puede actualizar.
@@ -157,7 +158,7 @@ class InsumoService:
             usuario_id: ID del usuario autenticado
             insumo_id: ID del insumo
             nombre: Nuevo nombre (opcional)
-            
+            minimo_stock: Nuevo mínimo stock (opcional)            
         Returns:
             {success: bool, data?: dict, error?: str, message?: str}
         """
@@ -172,7 +173,7 @@ class InsumoService:
                 return {"success": False, "error": f"Insumo {insumo_id} no existe"}
             
             # ACTUALIZAR
-            insumo = InsumoDAO.actualizar_insumo(insumo_id, nombre)
+            insumo = InsumoDAO.actualizar_insumo(insumo_id, nombre, minimo_stock)
             
             logger.info(f"Admin {usuario_id} actualizó insumo: {insumo_id}")
             return {

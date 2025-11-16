@@ -39,6 +39,7 @@ from src.controller.SolicitudVacacionesController import solicitud_vacaciones_bp
 from src.controller.HoldMesaController import hold_mesa_bp
 from src.controller.ReservaController import reserva_bp
 from src.controller.JobsController import jobs_bp
+from src.controller.PushNotificationController import bp as push_notifications_bp
  
 def create_app():
   app = Flask(__name__)
@@ -104,6 +105,7 @@ def create_app():
   app.register_blueprint(hold_mesa_bp)
   app.register_blueprint(reserva_bp)
   app.register_blueprint(jobs_bp)
+  app.register_blueprint(push_notifications_bp)
 
   # Manejo explícito de CORS para OPTIONS
   @app.before_request

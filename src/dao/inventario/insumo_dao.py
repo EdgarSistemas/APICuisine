@@ -17,12 +17,13 @@ class InsumoDAO:
     """Data Access Object para Insumo"""
     
     @staticmethod
-    def crear_insumo(nombre: str, unidad_id: int) -> dict:
+    def crear_insumo(nombre: str, minimo_stock: float, unidad_id: int) -> dict:
         """
         Crear nuevo insumo.
         
         Args:
             nombre: Nombre del insumo
+            minimo_stock: Mínimo stock del insumo
             unidad_id: ID de la unidad de medida
             
         Returns:
@@ -33,7 +34,7 @@ class InsumoDAO:
             insumo = Insumo(
                 nombre=nombre,
                 unidad_id=unidad_id,
-                minimo_stock=0,
+                minimo_stock=minimo_stock,
                 es_activo=True
             )
             session.add(insumo)
@@ -185,7 +186,7 @@ class InsumoDAO:
     
     
     @staticmethod
-    def actualizar_insumo(insumo_id: int, nombre: str = None) -> dict:
+    def actualizar_insumo(insumo_id: int, nombre: str = None, minimo_stock: float = None) -> dict:
         """
         Actualizar insumo.
         
@@ -207,6 +208,8 @@ class InsumoDAO:
             
             if nombre is not None:
                 insumo.nombre = nombre
+            if minimo_stock is not None:
+                insumo.minimo_stock = Decimal(minimo_stock)
             
             session.commit()
             logger.info(f"Insumo actualizado: {insumo_id}")

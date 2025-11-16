@@ -11,6 +11,7 @@ from marshmallow import ValidationError
 
 from src.services.inventario.insumo_service import InsumoService
 from src.schemas.insumo_schema import InsumoCreateSchema, InsumoUpdateSchema
+from src.core.utils.stock_alerts import StockAlertDAO
 
 logger = logging.getLogger(__name__)
 
@@ -203,6 +204,9 @@ def crear_insumo():
             nombre:
               type: string
               example: "Harina Premium"
+            minimo_stock:
+              type: float
+              example: 10.5
             unidad_id:
               type: integer
               example: 1
@@ -232,6 +236,7 @@ def crear_insumo():
         resultado = InsumoService.crear_insumo(
             usuario_id=usuario_id,
             nombre=datos_validados['nombre'],
+            minimo_stock=datos_validados['minimo_stock'],
             unidad_id=datos_validados['unidad_id']
         )
         
@@ -277,6 +282,10 @@ def actualizar_insumo(insumo_id):
           properties:
             nombre:
               type: string
+              example: "Harina Integral"
+            minimo_stock:
+              type: float
+              example: 15.0
     responses:
       200:
         description: Insumo actualizado
@@ -303,7 +312,8 @@ def actualizar_insumo(insumo_id):
         resultado = InsumoService.actualizar_insumo(
             usuario_id=usuario_id,
             insumo_id=insumo_id,
-            nombre=datos_validados.get('nombre')
+            nombre=datos_validados.get('nombre'),
+            minimo_stock=datos_validados.get('minimo_stock')
         )
         
         if resultado['success']:
@@ -314,6 +324,118 @@ def actualizar_insumo(insumo_id):
             
     except Exception as e:
         logger.error(f"Error en actualizar_insumo: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': 'SERVER_ERROR',
+            'message': str(e)
+        }), 500
+
+
+# ============================================================================
+# POST /api/insumos/stock-bajo/listar - Insumos con Stock Bajo por Sucursal
+# ============================================================================
+@bp.route('/stock-bajo/listar', methods=['POST'])
+@jwt_required()
+def listar_insumos_stock_bajo():
+    """
+    Obtiene insumos donde la cantidad actual es MENOR que el mínimo stock.
+    
+    Ejemplo:
+        Insumo A: minimo_stock=10, cantidad_actual=9 → INCLUYE
+        Insumo B: minimo_stock=10, cantidad_actual=10 → NO incluye
+        Insumo C: minimo_stock=10, cantidad_actual=11 → NO incluye
+    
+    ---
+    tags:
+      - Insumos
+    security:
+      - Bearer: []
+    parameters:
+      - in: body
+        name: body
+        required: true
+        schema:
+          type: object
+          required:
+            - sucursal_id
+          properties:
+            sucursal_id:
+              type: integer
+              example: 1
+              description: ID de la sucursal
+            solo_activos:
+              type: boolean
+              example: true
+              default: true
+              description: Si es true, solo devuelve insumos activos
+    responses:
+      200:
+        description: Lista de insumos con stock bajo
+        schema:
+          type: object
+          properties:
+            success:
+              type: boolean
+            cantidad:
+              type: integer
+              description: Cantidad de insumos con stock bajo
+            data:
+              type: array
+              items:
+                type: object
+                properties:
+                  id_insumo:
+                    type: integer
+                  nombre:
+                    type: string
+                  minimo_stock:
+                    type: number
+                  cantidad_actual:
+                    type: number
+                  diferencia:
+                    type: number
+                    description: cantidad_actual - minimo_stock (negativo si está bajo)
+                  unidad_clave:
+                    type: string
+                  unidad_nombre:
+                    type: string
+                  costo_promedio:
+                    type: number
+                  updated_at:
+                    type: string
+                    format: date-time
+      400:
+        description: Falta sucursal_id
+    """
+    try:
+        data = request.get_json()
+        
+        # Validar que venga sucursal_id
+        sucursal_id = data.get('sucursal_id')
+        if not sucursal_id:
+            return jsonify({
+                'success': False,
+                'error': 'MISSING_SUCURSAL_ID',
+                'message': 'Debe proporcionar sucursal_id en el body'
+            }), 400
+        
+        solo_activos = data.get('solo_activos', True)
+        
+        # Obtener insumos con stock bajo
+        insumos_bajo_stock = StockAlertDAO.obtener_insumos_stock_bajo(
+            sucursal_id=sucursal_id,
+            solo_activos=solo_activos
+        )
+        
+        return jsonify({
+            'success': True,
+            'sucursal_id': sucursal_id,
+            'cantidad': len(insumos_bajo_stock),
+            'data': insumos_bajo_stock
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error en listar_insumos_stock_bajo: {str(e)}")
         return jsonify({
             'success': False,
             'error': 'SERVER_ERROR',

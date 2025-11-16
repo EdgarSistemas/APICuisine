@@ -9,6 +9,7 @@ class InsumoCreateSchema(Schema):
     """Schema para crear insumo"""
     nombre = fields.Str(required=True, validate=validate.Length(min=1, max=30))
     unidad_id = fields.Int(required=True, validate=validate.Range(min=1))
+    minimo_stock = fields.Decimal(required=True, validate=validate.Range(min=0))
 
     class Meta:
         strict = True
@@ -17,6 +18,7 @@ class InsumoCreateSchema(Schema):
 class InsumoUpdateSchema(Schema):
     """Schema para actualizar insumo"""
     nombre = fields.Str(required=False, validate=validate.Length(min=1, max=30))
+    minimo_stock = fields.Decimal(required=False, validate=validate.Range(min=0))
 
     class Meta:
         strict = True
