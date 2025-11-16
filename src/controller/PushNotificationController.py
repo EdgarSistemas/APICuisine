@@ -543,20 +543,7 @@ def verificar_stock_todas_sucursales():
       500:
         description: Error interno
     """
-    try:
-        data = request.get_json() or {}
-        
-        # Validar clave secreta
-        secret_key = data.get('secret_key') or request.headers.get('X-Azure-Secret-Key')
-        
-        if secret_key != AZURE_FUNCTION_SECRET_KEY:
-            logger.warning(f"Intento de acceso no autorizado a verificar-stock-todas-sucursales")
-            return jsonify({
-                'success': False,
-                'error': 'UNAUTHORIZED',
-                'message': 'Clave secreta inválida'
-            }), 401
-        
+    try:        
         from datetime import datetime
         from zoneinfo import ZoneInfo
         tz_mexico = ZoneInfo("America/Mexico_City")
@@ -569,7 +556,7 @@ def verificar_stock_todas_sucursales():
         
         with get_db_session() as session:
             sucursales = session.query(Sucursal).filter(
-                Sucursal.es_activo == True
+                Sucursal.es_activa == True
             ).all()
             sucursal_ids = [s.id_sucursal for s in sucursales]
         
