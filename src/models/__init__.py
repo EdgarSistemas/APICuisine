@@ -34,6 +34,8 @@ from .catalogos import (
 # Modelos de operaciones
 from .operaciones import (
     Pedido,
+    PedidoItem,
+    PedidoEstadoHist,
     AsignacionMesa
 )
 
@@ -112,6 +114,8 @@ __all__ = [
     
     # Modelos de operaciones
     'Pedido',
+    'PedidoItem',
+    'PedidoEstadoHist',
     'AsignacionMesa',
     
     # Modelos de inventario

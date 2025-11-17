@@ -298,6 +298,7 @@ class HorarioService:
             
             logger.info(f"Generando códigos para fecha (México): {fecha}")
             
+            
             resultado = HorarioDAO.generar_codigos_turno_dia(fecha, expira_horas, tz_mexico=tz_mexico)
             
             if not resultado:
@@ -311,3 +312,95 @@ class HorarioService:
         except Exception as e:
             logger.error(f"Error al generar códigos: {str(e)}")
             return {"error": str(e)}, 500
+    
+    
+    @staticmethod
+    def obtener_usuarios_asignados(horario_id: int) -> dict:
+        """
+        Obtener horario con su encabezado y lista de usuarios asignados.
+        
+        Returns:
+            {
+                "success": True,
+                "horario": {...},
+                "usuarios_asignados": [
+                    {
+                        "id_usuario": 1,
+                        "nombre": "Juan Pérez",
+                        "email": "juan@example.com",
+                        "fecha_inicio": "2025-11-01",
+                        "fecha_fin": null,
+                        "es_activo": true
+                    },
+                    ...
+                ],
+                "total_usuarios": 5
+            }
+        """
+        try:
+            # Obtener horario
+            resultado_horario = HorarioDAO.obtener_horario_por_id(horario_id)
+            
+            if not resultado_horario:
+                return {
+                    "success": False,
+                    "error": "Horario no encontrado",
+                    "horario": None
+                }
+            
+            # Obtener usuarios asignados
+            usuarios = HorarioDAO.obtener_usuarios_asignados(horario_id)
+            
+            return {
+                "success": True,
+                "horario": resultado_horario,
+                "usuarios_asignados": usuarios,
+                "total_usuarios": len(usuarios)
+            }
+        except Exception as e:
+            logger.error(f"Error al obtener usuarios asignados: {str(e)}")
+            return {"success": False, "error": str(e), "horario": None}
+    
+    
+    @staticmethod
+    def listar_horarios_con_usuarios(sucursal_id: int) -> dict:
+        """
+        Listar horarios de una sucursal con el count de usuarios asignados.
+        
+        Returns:
+            {
+                "success": True,
+                "horarios": [
+                    {
+                        "id_horario": 1,
+                        "sucursal_id": 1,
+                        "clave": "TURNO_MANANA",
+                        "nombre": "Turno Matutino",
+                        "usuarios_asignados": 5,
+                        ...
+                    },
+                    ...
+                ],
+                "count": 3
+            }
+        """
+        try:
+            horarios = HorarioDAO.listar_horarios(
+                sucursal_id=sucursal_id,
+                solo_activos=True
+            )
+            
+            # Para cada horario, añadir el count de usuarios
+            for horario in horarios:
+                count_usuarios = HorarioDAO.contar_usuarios_por_horario(horario.get('horario').get('id_horario'))
+                horario['usuarios_asignados'] = count_usuarios
+            
+            return {
+                "success": True,
+                "horarios": horarios,
+                "count": len(horarios)
+            }
+        except Exception as e:
+            logger.error(f"Error al listar horarios con usuarios: {str(e)}")
+            return {"success": False, "error": str(e), "horarios": []}
+

@@ -471,3 +471,57 @@ class HorarioDAO:
                 "codigos_existentes": codigos_existentes,
                 "total_codigos": len(codigos_generados) + len(codigos_existentes)
             }
+    
+    
+    @staticmethod
+    def obtener_usuarios_asignados(horario_id: int) -> list:
+        """
+        Obtener lista de usuarios asignados a un horario con info básica.
+        
+        Returns:
+            Lista de dicts con info básica del usuario
+        """
+        with get_db_session() as session:
+            # Join UsuarioHorario con Usuario para obtener info del usuario
+            usuarios = session.query(
+                UsuarioHorario.usuario_id,
+                UsuarioHorario.horario_id,
+                UsuarioHorario.fecha_inicio,
+                UsuarioHorario.fecha_fin,
+                UsuarioHorario.es_activo
+            ).filter(
+                UsuarioHorario.horario_id == horario_id,
+                UsuarioHorario.es_activo == True
+            ).all()
+            
+            resultado = []
+            for asignacion in usuarios:
+                
+                # Si queremos info más detallada, usamos una query diferente
+                from src.models.auth.usuario import Usuario
+                usuario_obj = session.query(Usuario).filter(
+                    Usuario.id_usuario == asignacion[0]
+                ).first()
+                
+                if usuario_obj:
+                    resultado.append({
+                        "id_usuario": usuario_obj.id_usuario,
+                        "nombre": usuario_obj.nombre,
+                        "email": usuario_obj.email,
+                        "fecha_inicio": asignacion[2].isoformat() if asignacion[2] else None,
+                        "fecha_fin": asignacion[3].isoformat() if asignacion[3] else None,
+                        "es_activo": asignacion[4]
+                    })
+            
+            return resultado
+    
+    
+    @staticmethod
+    def contar_usuarios_por_horario(horario_id: int) -> int:
+        """Contar cantidad de usuarios asignados activos a un horario"""
+        with get_db_session() as session:
+            count = session.query(UsuarioHorario).filter(
+                UsuarioHorario.horario_id == horario_id,
+                UsuarioHorario.es_activo == True
+            ).count()
+            return count

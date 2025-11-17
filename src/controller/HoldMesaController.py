@@ -20,25 +20,42 @@ hold_mesa_bp = Blueprint('hold_mesa', __name__, url_prefix='/api/holds')
 @jwt_required()
 def crear_hold():
     """
-    POST /api/holds
-    
-    Crear hold temporal de mesa.
-    Cliente o recepcionista puede crear hold durante proceso de reserva.
-    
-    Body:
-    {
-        "mesa_id": 5,
-        "actor_tipo": 1,  // 1=Cliente, 2=Recepcionista
-        "inicio": "2025-11-15T19:00:00",
-        "fin_estimado": "2025-11-15T21:00:00",
-        "ttl_minutes": 5,  // Opcional, default 5
-        "notas": "Mesa para 4 personas"  // Opcional
-    }
-    
-    Returns:
-        200: Hold creado con datos y expires_at
-        400: Validación fallida
-        409: Mesa no disponible
+    Crear hold temporal de mesa (3 minutos).
+    ---
+    tags:
+      - Holds
+    summary: Crear hold de mesa
+    description: Crea un hold temporal de 3 minutos para reservar una mesa.
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required:
+              - mesa_id
+            properties:
+              mesa_id:
+                type: integer
+              actor_tipo:
+                type: integer
+                description: 1=Cliente, 2=Recepcionista
+              inicio:
+                type: string
+                format: date-time
+              fin_estimado:
+                type: string
+                format: date-time
+              ttl_minutes:
+                type: integer
+                default: 3
+    responses:
+      201:
+        description: Hold creado
+      400:
+        description: Validación fallida
+      409:
+        description: Mesa no disponible
     """
     try:
         # Validar schema
@@ -81,13 +98,46 @@ def crear_hold():
 @jwt_required()
 def obtener_hold(hold_id):
     """
-    GET /api/holds/{hold_id}
-    
-    Obtener detalles de un hold.
-    
-    Returns:
-        200: Datos del hold
-        404: Hold no existe
+    Obtener detalles de un hold
+    ---
+    tags:
+      - Holds
+    summary: Obtener hold por ID
+    description: Retrieves detailed information about a specific hold including mesa details and remaining TTL.
+    parameters:
+      - in: path
+        name: hold_id
+        type: integer
+        required: true
+        description: ID del hold
+    responses:
+      200:
+        description: Hold encontrado
+        schema:
+          type: object
+          properties:
+            id_hold_mesa:
+              type: integer
+            mesa_id:
+              type: integer
+            estatus:
+              type: integer
+              description: "1=Activo, 2=Cancelado, 3=Expirado"
+            actor_usuario_id:
+              type: integer
+            inicio:
+              type: string
+              format: date-time
+            fin_estimado:
+              type: string
+              format: date-time
+            fechahora_expiracion:
+              type: string
+              format: date-time
+      404:
+        description: Hold no existe
+      500:
+        description: Error interno
     """
     try:
         result = HoldMesaService.obtener_hold(hold_id)
@@ -106,15 +156,52 @@ def obtener_hold(hold_id):
 @jwt_required()
 def listar_holds_activos():
     """
-    GET /api/holds?mesa_id=5
-    
-    Listar holds activos (no expirados).
-    
-    Query params:
-        - mesa_id (opcional): Filtrar por mesa
-    
-    Returns:
-        200: Lista de holds activos
+    Listar holds activos (no expirados)
+    ---
+    tags:
+      - Holds
+    summary: Listar holds activos
+    description: Lista todos los holds activos. Opcionalmente filtrar por mesa_id. Excluye holds expirados y cancelados.
+    parameters:
+      - in: query
+        name: mesa_id
+        type: integer
+        required: false
+        description: Filtrar por mesa (opcional)
+    responses:
+      200:
+        description: Lista de holds activos
+        schema:
+          type: object
+          properties:
+            holds:
+              type: array
+              items:
+                type: object
+                properties:
+                  id_hold_mesa:
+                    type: integer
+                  mesa_id:
+                    type: integer
+                  estatus:
+                    type: integer
+                  actor_usuario_id:
+                    type: integer
+                  inicio:
+                    type: string
+                    format: date-time
+                  fin_estimado:
+                    type: string
+                    format: date-time
+                  fechahora_expiracion:
+                    type: string
+                    format: date-time
+            total:
+              type: integer
+      400:
+        description: Error al listar holds
+      500:
+        description: Error interno
     """
     try:
         mesa_id = request.args.get('mesa_id', type=int)
@@ -138,21 +225,52 @@ def listar_holds_activos():
 @jwt_required()
 def cancelar_hold(hold_id):
     """
-    POST /api/holds/{hold_id}/cancelar
-    
-    Cancelar hold activo.
-    Usuario puede cancelar si es dueño del hold.
-    
-    Body (opcional):
-    {
-        "motivo": "Ya no necesito la mesa"
-    }
-    
-    Returns:
-        200: Hold cancelado
-        403: Sin permisos
-        404: Hold no existe
-        400: Hold no está activo
+    Cancelar hold activo
+    ---
+    tags:
+      - Holds
+    summary: Cancelar hold
+    description: Cancela un hold activo. Solo el usuario que creó el hold puede cancelarlo (o admin/recepcionista).
+    parameters:
+      - in: path
+        name: hold_id
+        type: integer
+        required: true
+        description: ID del hold a cancelar
+    requestBody:
+      required: false
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              motivo:
+                type: string
+                description: Razón de la cancelación (opcional)
+    responses:
+      200:
+        description: Hold cancelado exitosamente
+        schema:
+          type: object
+          properties:
+            message:
+              type: string
+            hold:
+              type: object
+              properties:
+                id_hold_mesa:
+                  type: integer
+                estatus:
+                  type: integer
+                  description: "Será 2 (Cancelado)"
+      403:
+        description: Sin permisos para cancelar este hold
+      404:
+        description: Hold no existe
+      400:
+        description: Hold no está activo o datos inválidos
+      500:
+        description: Error interno
     """
     try:
         # Validar schema (motivo opcional)
@@ -192,21 +310,56 @@ def cancelar_hold(hold_id):
 @jwt_required()
 def verificar_disponibilidad():
     """
-    POST /api/holds/disponibilidad
-    
-    Verificar si una mesa está disponible en un rango de fechas.
-    Útil antes de crear hold.
-    
-    Body:
-    {
-        "mesa_id": 5,
-        "inicio": "2025-11-15T19:00:00",
-        "fin_estimado": "2025-11-15T21:00:00"
-    }
-    
-    Returns:
-        200: {disponible: true/false, mensaje: "..."}
-        400: Datos inválidos
+    Verificar disponibilidad de mesa en rango de fechas
+    ---
+    tags:
+      - Holds
+    summary: Verificar disponibilidad de mesa
+    description: Verifica si una mesa está disponible para reservar en un rango de fechas específico. Útil para mostrar disponibilidad antes de crear hold. Excluye holds y reservas activas en ese período.
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required:
+              - mesa_id
+              - inicio
+              - fin_estimado
+            properties:
+              mesa_id:
+                type: integer
+                description: ID de la mesa
+              inicio:
+                type: string
+                format: date-time
+                example: "2025-11-15T19:00:00"
+              fin_estimado:
+                type: string
+                format: date-time
+                example: "2025-11-15T21:00:00"
+    responses:
+      200:
+        description: Verificación completada
+        schema:
+          type: object
+          properties:
+            disponible:
+              type: boolean
+              description: "true si la mesa está disponible en ese período"
+            mensaje:
+              type: string
+              description: "Descripción del resultado (disponible o razón por la que no)"
+      400:
+        description: Datos inválidos o mesa no existe
+        schema:
+          type: object
+          properties:
+            error:
+              type: string
+              description: Mensaje de error (ej, "Mesa 5 no existe", "Formato de fecha inválido")
+      500:
+        description: Error interno
     """
     try:
         data = request.json

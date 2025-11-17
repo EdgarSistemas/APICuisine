@@ -25,8 +25,11 @@ class Pago(BaseModel):
     monto = Column(Numeric(12, 2), nullable=False)
     propina = Column(Numeric(12, 2), default=0, nullable=False)
     moneda = Column(String(5), default='MXN', nullable=False)
+    metodo_pago = Column(String(50), nullable=True)  # Efectivo, Tarjeta, QR, Transferencia
+    referencia = Column(String(100), nullable=True)  # Número de transacción
     estatus = Column(Integer, nullable=False, default=1)  # 1=Pagado, 2=Pendiente, 3=Anulado
     usuario_id = Column(Integer, ForeignKey('seguridad.Usuario.id_usuario'))
+    fecha_pago = Column(DateTime, nullable=True)  # Fecha cuando se confirma pago
     created_at = Column(DateTime, server_default=text('GETUTCDATE()'), nullable=False)
     updated_at = Column(DateTime)
     

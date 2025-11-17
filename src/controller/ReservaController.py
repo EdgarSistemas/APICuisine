@@ -25,27 +25,38 @@ reserva_bp = Blueprint('reserva', __name__, url_prefix='/api/reservas')
 @jwt_required()
 def crear_reserva():
     """
-    POST /api/reservas
-    
-    Crear reserva confirmada.
-    Puede venir desde un hold (recomendado) o directo.
-    
-    Body:
-    {
-        "cliente_id": 10,
-        "recepcionista_id": 5,  // Opcional
-        "inicio": "2025-11-15T19:00:00",
-        "fin_estimado": "2025-11-15T21:00:00",
-        "tolerancia_min": 15,  // Opcional
-        "notas": "Celebración cumpleaños",  // Opcional
-        "hold_id": 123  // Opcional - ID del hold origen
-    }
-    
-    Returns:
-        201: Reserva creada
-        400: Validación fallida
-        404: Hold no existe (si se especifica)
-        409: Hold expirado o no activo
+    Crear reserva confirmada desde hold.
+    ---
+    tags:
+      - Reservas
+    summary: Crear reserva
+    description: Crea una reserva confirmada. Recomendado desde un hold existente.
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              cliente_id:
+                type: integer
+              inicio:
+                type: string
+                format: date-time
+              fin_estimado:
+                type: string
+                format: date-time
+              hold_id:
+                type: integer
+    responses:
+      201:
+        description: Reserva creada
+      400:
+        description: Validación fallida
+      404:
+        description: Hold no existe
+      409:
+        description: Hold expirado
     """
     try:
         # Validar schema
@@ -94,13 +105,47 @@ def crear_reserva():
 @jwt_required()
 def obtener_reserva(reserva_id):
     """
-    GET /api/reservas/{reserva_id}
-    
-    Obtener detalles de una reserva.
-    
-    Returns:
-        200: Datos de la reserva
-        404: Reserva no existe
+    Obtener detalles de una reserva
+    ---
+    tags:
+      - Reservas
+    summary: Obtener reserva por ID
+    description: Retrieves detailed information about a specific reservation including customer, mesa, and status information.
+    parameters:
+      - in: path
+        name: reserva_id
+        type: integer
+        required: true
+        description: ID de la reserva
+    responses:
+      200:
+        description: Reserva encontrada
+        schema:
+          type: object
+          properties:
+            id_reserva:
+              type: integer
+            mesa_id:
+              type: integer
+            cliente_id:
+              type: integer
+            estatus:
+              type: integer
+              description: "1=Programada, 2=EnCurso, 3=Completada, 4=NoShow, 5=Cancelada"
+            inicio:
+              type: string
+              format: date-time
+            fin_estimado:
+              type: string
+              format: date-time
+            usuario_creacion_id:
+              type: integer
+            notas:
+              type: string
+      404:
+        description: Reserva no existe
+      500:
+        description: Error interno
     """
     try:
         result = ReservaService.obtener_reserva(reserva_id)
@@ -119,18 +164,66 @@ def obtener_reserva(reserva_id):
 @jwt_required()
 def listar_reservas():
     """
-    GET /api/reservas?cliente_id=10&estatus=1&fecha_desde=2025-11-10
-    
-    Listar reservas con filtros opcionales.
-    
-    Query params:
-        - cliente_id (opcional): Filtrar por cliente
-        - estatus (opcional): Filtrar por estatus (1=Programada, 2=EnCurso, etc.)
-        - fecha_desde (opcional): Desde fecha (ISO format)
-        - fecha_hasta (opcional): Hasta fecha (ISO format)
-    
-    Returns:
-        200: Lista de reservas
+    Listar reservas con filtros
+    ---
+    tags:
+      - Reservas
+    summary: Listar reservas
+    description: Lists all reservations with optional filters by customer, status, and date range. Only returns reservations from the authenticated user's sucursal (multi-tenant).
+    parameters:
+      - in: query
+        name: cliente_id
+        type: integer
+        required: false
+        description: Filtrar por cliente (opcional)
+      - in: query
+        name: estatus
+        type: integer
+        required: false
+        description: "Filtrar por estatus: 1=Programada, 2=EnCurso, 3=Completada, 4=NoShow, 5=Cancelada (opcional)"
+      - in: query
+        name: fecha_desde
+        type: string
+        format: date
+        required: false
+        description: Desde fecha en formato ISO (opcional)
+      - in: query
+        name: fecha_hasta
+        type: string
+        format: date
+        required: false
+        description: Hasta fecha en formato ISO (opcional)
+    responses:
+      200:
+        description: Lista de reservas
+        schema:
+          type: object
+          properties:
+            reservas:
+              type: array
+              items:
+                type: object
+                properties:
+                  id_reserva:
+                    type: integer
+                  mesa_id:
+                    type: integer
+                  cliente_id:
+                    type: integer
+                  estatus:
+                    type: integer
+                  inicio:
+                    type: string
+                    format: date-time
+                  fin_estimado:
+                    type: string
+                    format: date-time
+            total:
+              type: integer
+      400:
+        description: Parametros invalidos
+      500:
+        description: Error interno
     """
     try:
         # Parsear query params
@@ -170,15 +263,40 @@ def listar_reservas():
 @jwt_required()
 def iniciar_reserva(reserva_id):
     """
-    POST /api/reservas/{reserva_id}/iniciar
-    
-    Iniciar reserva (cliente llegó).
-    Cambia estatus a 2 (EnCurso).
-    
-    Returns:
-        200: Reserva iniciada
-        400: No está en horario permitido o estatus incorrecto
-        404: Reserva no existe
+    Iniciar reserva (cliente llego)
+    ---
+    tags:
+      - Reservas
+    summary: Iniciar reserva
+    description: Marks a reservation as started (customer arrived). Changes status to 2 (EnCurso). Validates that the reservation is within allowed check-in window.
+    parameters:
+      - in: path
+        name: reserva_id
+        type: integer
+        required: true
+        description: ID de la reserva a iniciar
+    responses:
+      200:
+        description: Reserva iniciada exitosamente
+        schema:
+          type: object
+          properties:
+            message:
+              type: string
+            reserva:
+              type: object
+              properties:
+                id_reserva:
+                  type: integer
+                estatus:
+                  type: integer
+                  description: "Sera 2 (EnCurso)"
+      400:
+        description: No esta en horario permitido, estatus incorrecto, o cliente no llego a tiempo
+      404:
+        description: Reserva no existe
+      500:
+        description: Error interno
     """
     try:
         # Usuario autenticado
@@ -208,15 +326,40 @@ def iniciar_reserva(reserva_id):
 @jwt_required()
 def completar_reserva(reserva_id):
     """
-    POST /api/reservas/{reserva_id}/completar
-    
-    Completar reserva (cliente terminó).
-    Cambia estatus a 3 (Completada).
-    
-    Returns:
-        200: Reserva completada
-        400: Estatus incorrecto
-        404: Reserva no existe
+    Completar reserva (cliente termino)
+    ---
+    tags:
+      - Reservas
+    summary: Completar reserva
+    description: Marks a reservation as completed. Changes status to 3 (Completada). This is done when the customer finishes their meal and leaves.
+    parameters:
+      - in: path
+        name: reserva_id
+        type: integer
+        required: true
+        description: ID de la reserva a completar
+    responses:
+      200:
+        description: Reserva completada exitosamente
+        schema:
+          type: object
+          properties:
+            message:
+              type: string
+            reserva:
+              type: object
+              properties:
+                id_reserva:
+                  type: integer
+                estatus:
+                  type: integer
+                  description: "Sera 3 (Completada)"
+      400:
+        description: Estatus incorrecto o no puede completarse
+      404:
+        description: Reserva no existe
+      500:
+        description: Error interno
     """
     try:
         # Usuario autenticado
@@ -246,20 +389,50 @@ def completar_reserva(reserva_id):
 @jwt_required()
 def cancelar_reserva(reserva_id):
     """
-    POST /api/reservas/{reserva_id}/cancelar
-    
-    Cancelar reserva.
-    Cambia estatus a 5 (Cancelada).
-    
-    Body (opcional):
-    {
-        "motivo": "Cambio de planes"
-    }
-    
-    Returns:
-        200: Reserva cancelada
-        400: Estatus incorrecto
-        404: Reserva no existe
+    Cancelar reserva
+    ---
+    tags:
+      - Reservas
+    summary: Cancelar reserva
+    description: Cancels an active reservation. Changes status to 5 (Cancelada). Can only cancel from Programada (1) or EnCurso (2) status.
+    parameters:
+      - in: path
+        name: reserva_id
+        type: integer
+        required: true
+        description: ID de la reserva a cancelar
+    requestBody:
+      required: false
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              motivo:
+                type: string
+                description: Razon de la cancelacion (opcional)
+    responses:
+      200:
+        description: Reserva cancelada exitosamente
+        schema:
+          type: object
+          properties:
+            message:
+              type: string
+            reserva:
+              type: object
+              properties:
+                id_reserva:
+                  type: integer
+                estatus:
+                  type: integer
+                  description: "Sera 5 (Cancelada)"
+      400:
+        description: Estatus incorrecto o no puede cancelarse, o datos invalidos
+      404:
+        description: Reserva no existe
+      500:
+        description: Error interno
     """
     try:
         # Validar schema
@@ -300,15 +473,42 @@ def cancelar_reserva(reserva_id):
 @jwt_required()
 def marcar_no_show(reserva_id):
     """
-    POST /api/reservas/{reserva_id}/no-show
-    
-    Marcar manualmente como NoShow.
-    Solo recepcionistas/admins.
-    
-    Returns:
-        200: Reserva marcada como NoShow
-        403: Sin permisos
-        404: Reserva no existe
+    Marcar reserva como NoShow
+    ---
+    tags:
+      - Reservas
+    summary: Marcar como NoShow
+    description: Manually marks a reservation as NoShow (status 4). Only recepcionistas/admins can perform this action. Should be used when a customer with a reservation does not show up by the end of the tolerance window.
+    parameters:
+      - in: path
+        name: reserva_id
+        type: integer
+        required: true
+        description: ID de la reserva a marcar como NoShow
+    responses:
+      200:
+        description: Reserva marcada como NoShow exitosamente
+        schema:
+          type: object
+          properties:
+            message:
+              type: string
+            reserva:
+              type: object
+              properties:
+                id_reserva:
+                  type: integer
+                estatus:
+                  type: integer
+                  description: "Sera 4 (NoShow)"
+      400:
+        description: Estatus incorrecto o no puede marcarse como NoShow
+      403:
+        description: Sin permisos para marcar como NoShow (requiere recepcionista/admin)
+      404:
+        description: Reserva no existe
+      500:
+        description: Error interno
     """
     try:
         # Usuario autenticado

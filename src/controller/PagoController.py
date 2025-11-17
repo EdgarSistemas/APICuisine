@@ -1,13 +1,18 @@
 """
-PagoController - Gestión de pagos
-Endpoints: POST, GET, GET/{id}, PUT, DELETE (soft)
-Note: Pago → Pedido relationship, validates pedido ownership
+PagoController - Gestión de Pagos
+Endpoints: POST (crear), POST (marcar pagado), GET (listar), GET/{id}
 """
 
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
+from marshmallow import ValidationError
 import logging
 
+from src.services.operaciones.pago_service import PagoService
+from src.schemas.pago_schema import (
+    PagoCreateSchema,
+    PagoMarcarPagadoSchema
+)
 from src.core.utils.multitenant import (
     es_admin,
     validar_acceso_sucursal,
@@ -22,65 +27,92 @@ bp = Blueprint('pagos', __name__, url_prefix='/api/pagos')
 
 
 # ============================================================================
-# POST /api/pagos - Crear Pago (Admin + Cajero)
+# POST /api/pagos - Crear Pago
 # ============================================================================
 @bp.route('', methods=['POST'])
 @jwt_required()
 def crear_pago():
     """
-    Crear pago (Admin o Cajero de su sucursal)
+    Crear registro de pago para un pedido.
+    ---
+    tags:
+      - Pagos
+    summary: Crear pago
+    description: Registra un nuevo pago para un pedido.
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required:
+              - pedido_id
+              - sucursal_id
+              - monto
+            properties:
+              pedido_id:
+                type: integer
+              sucursal_id:
+                type: integer
+              monto:
+                type: number
+              propina:
+                type: number
+                default: 0
+              moneda:
+                type: string
+                default: MXN
+    responses:
+      201:
+        description: Pago creado exitosamente
+      400:
+        description: Validación fallida
+      403:
+        description: Sin acceso a sucursal
+      404:
+        description: Pedido no existe
     """
     try:
-        usuario_id = get_jwt_identity()
-        data = request.get_json()
+        # Validar schema
+        schema = PagoCreateSchema()
+        data = schema.load(request.json)
         
-        # Validación 1: campos requeridos
-        pedido_id = data.get('pedido_id')
-        sucursal_id = data.get('sucursal_id')
-        monto = data.get('monto')
+        current_user = get_jwt_identity()
+        usuario_id = current_user.get('id_usuario')
         
-        if not pedido_id or not sucursal_id or not monto:
-            return {'success': False, 'error': 'pedido_id, sucursal_id, monto requeridos'}, 400
+        # Verificar acceso a sucursal
+        if not validar_acceso_sucursal(usuario_id, data['sucursal_id']):
+            return jsonify({"error": "No tienes acceso a esta sucursal"}), 403
         
-        # Validación 2: sucursal existe
-        if not validar_sucursal_existe(sucursal_id):
-            return {'success': False, 'error': 'Sucursal no existe'}, 400
+        # Usar servicio para crear pago
+        result = PagoService.crear_pago(
+            pedido_id=data['pedido_id'],
+            sucursal_id=data['sucursal_id'],
+            monto=data['monto'],
+            propina=data.get('propina', 0),
+            moneda=data.get('moneda', 'MXN'),
+            usuario_id=usuario_id
+        )
         
-        # Validación 3: usuario tiene acceso
-        if not validar_acceso_sucursal(usuario_id, sucursal_id):
-            return {'success': False, 'error': 'FORBIDDEN'}, 403
+        if not result['success']:
+            if 'no existe' in result.get('error', ''):
+                return jsonify({"error": result['error']}), 404
+            elif 'mismatch' in result.get('error', ''):
+                return jsonify({"error": result['error']}), 400
+            else:
+                return jsonify({"error": result['error']}), 400
         
-        from src.core.db.session_manager import get_db_session
-        with get_db_session() as session:
-            # Validación 4: pedido existe y pertenece a sucursal
-            pedido = session.query(Pedido).get(pedido_id)
-            if not pedido or pedido.sucursal_id != sucursal_id:
-                return {'success': False, 'error': 'Pedido no existe o sucursal mismatch'}, 400
-            
-            # Crear pago
-            pago = Pago(
-                pedido_id=pedido_id,
-                sucursal_id=sucursal_id,
-                monto=monto,
-                propina=data.get('propina', 0),
-                moneda=data.get('moneda', 'MXN'),
-                estatus=data.get('estatus', 1),  # 1 = Pagado
-                usuario_id=usuario_id
-            )
-            
-            session.add(pago)
-            session.commit()
-            logger.info(f"Pago {pago.id_pago} creado por usuario {usuario_id}")
-            
-            return {
-                'success': True,
-                'data': pago.to_dict(),
-                'message': 'Pago creado'
-            }, 201
+        return jsonify({
+            "message": "Pago creado exitosamente",
+            "pago": result['data']
+        }), 201
         
+    except ValidationError as e:
+        logger.error(f"Error de validación en crear_pago: {e.messages}")
+        return jsonify({"error": "Datos inválidos", "detalles": e.messages}), 400
     except Exception as e:
-        logger.error(f"Error creando pago: {str(e)}")
-        return {'success': False, 'error': 'Error interno'}, 500
+        logger.error(f"Error en crear_pago: {str(e)}")
+        return jsonify({"error": f"Error interno: {str(e)}"}), 500
 
 
 # ============================================================================
@@ -90,10 +122,28 @@ def crear_pago():
 @jwt_required()
 def obtener_pagos():
     """
-    Listar pagos (Admin ve todos, Cajero ve su sucursal)
+    Listar pagos registrados.
+    ---
+    tags:
+      - Pagos
+    summary: Obtener lista de pagos
+    description: Retorna lista de pagos con filtros opcionales.
+    parameters:
+      - in: query
+        name: sucursal_id
+        type: integer
+        description: Filtrar por sucursal (opcional)
+      - in: query
+        name: pedido_id
+        type: integer
+        description: Filtrar por pedido (opcional)
+    responses:
+      200:
+        description: Lista de pagos
     """
     try:
-        usuario_id = get_jwt_identity()
+        current_user = get_jwt_identity()
+        usuario_id = current_user.get('id_usuario')
         
         from src.core.db.session_manager import get_db_session
         with get_db_session() as session:
@@ -102,129 +152,259 @@ def obtener_pagos():
             # Aplicar filtro multi-tenant
             query = agregar_filtro_sucursal(query, Pago, usuario_id)
             
+            # Filtros opcionales
+            sucursal_id = request.args.get('sucursal_id', type=int)
+            if sucursal_id:
+                query = query.filter(Pago.sucursal_id == sucursal_id)
+            
+            pedido_id = request.args.get('pedido_id', type=int)
+            if pedido_id:
+                query = query.filter(Pago.pedido_id == pedido_id)
+            
             pagos = query.order_by(Pago.created_at.desc()).all()
             
-            return {
-                'success': True,
-                'data': [p.to_dict() for p in pagos],
-                'total': len(pagos)
-            }, 200
+            return jsonify({
+                "pagos": [p.to_dict() for p in pagos],
+                "total": len(pagos)
+            }), 200
             
     except Exception as e:
         logger.error(f"Error listando pagos: {str(e)}")
-        return {'success': False, 'error': 'Error interno'}, 500
+        return jsonify({"error": f"Error interno: {str(e)}"}), 500
 
 
 # ============================================================================
-# GET /api/pagos/{id} - Obtener Pago por ID
+# GET /api/pagos/{pago_id} - Obtener Pago por ID
 # ============================================================================
 @bp.route('/<int:pago_id>', methods=['GET'])
 @jwt_required()
 def obtener_pago(pago_id):
     """
-    Obtener pago específico
+    Obtener detalles de un pago específico.
+    ---
+    tags:
+      - Pagos
+    summary: Obtener pago por ID
+    description: Retorna los detalles completos de un pago.
+    parameters:
+      - in: path
+        name: pago_id
+        type: integer
+        required: true
+    responses:
+      200:
+        description: Datos del pago
+      403:
+        description: Sin acceso a sucursal
+      404:
+        description: Pago no existe
     """
     try:
-        usuario_id = get_jwt_identity()
+        current_user = get_jwt_identity()
+        usuario_id = current_user.get('id_usuario')
         
-        from src.core.db.session_manager import get_db_session
-        with get_db_session() as session:
-            pago = session.query(Pago).get(pago_id)
-            
-            if not pago:
-                return {'success': False, 'error': 'Pago no existe'}, 404
-            
-            # Validar acceso
-            if not validar_pertenencia_sucursal(usuario_id, pago):
-                return {'success': False, 'error': 'FORBIDDEN'}, 403
-            
-            return {
-                'success': True,
-                'data': pago.to_dict()
-            }, 200
+        result = PagoService.obtener_pago(pago_id)
+        
+        if not result['success']:
+            return jsonify({"error": result['error']}), 404
+        
+        # Validar acceso a sucursal
+        sucursal_id = result['data'].get('sucursal_id')
+        if not validar_acceso_sucursal(usuario_id, sucursal_id):
+            return jsonify({"error": "No tienes acceso a esta sucursal"}), 403
+        
+        return jsonify(result['data']), 200
             
     except Exception as e:
         logger.error(f"Error obteniendo pago {pago_id}: {str(e)}")
-        return {'success': False, 'error': 'Error interno'}, 500
+        return jsonify({"error": f"Error interno: {str(e)}"}), 500
 
 
 # ============================================================================
-# PUT /api/pagos/{id} - Actualizar Pago (propina, estatus)
+# POST /api/pagos/{pago_id}/marcar-pagado - Marcar Pago Completado
+# ============================================================================
+@bp.route('/<int:pago_id>/marcar-pagado', methods=['POST'])
+@jwt_required()
+def marcar_pagado(pago_id):
+    """
+    Marcar pago como completado - TRANSICIONA PEDIDO A PAGADO.
+    ---
+    tags:
+      - Pagos
+    summary: Marcar pago como completado (CRITICAL)
+    description: |
+      Marca pago como completado (estatus 1→2).
+      Automáticamente transiciona el pedido asociado a estatus PAGADO (5).
+      
+    parameters:
+      - in: path
+        name: pago_id
+        type: integer
+        required: true
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required:
+              - metodo_pago
+            properties:
+              metodo_pago:
+                type: string
+                description: Método de pago (Efectivo, Tarjeta, QR, etc)
+              referencia:
+                type: string
+                description: Número de transacción (opcional)
+    responses:
+      200:
+        description: Pago marcado como completado
+      400:
+        description: Validación fallida
+      404:
+        description: Pago no existe
+    """
+    try:
+        schema = PagoMarcarPagadoSchema()
+        data = schema.load(request.json)
+        
+        current_user = get_jwt_identity()
+        usuario_id = current_user.get('id_usuario')
+        
+        result = PagoService.marcar_pagado(
+            pago_id=pago_id,
+            metodo_pago=data['metodo_pago'],
+            referencia=data.get('referencia'),
+            usuario_id=usuario_id
+        )
+        
+        if not result['success']:
+            if 'no existe' in result.get('error', ''):
+                return jsonify({"error": result['error']}), 404
+            else:
+                return jsonify({"error": result['error']}), 400
+        
+        return jsonify({
+            "message": "Pago marcado como completado",
+            "pago": result['data']
+        }), 200
+        
+    except ValidationError as e:
+        logger.error(f"Error de validación en marcar_pagado: {e.messages}")
+        return jsonify({"error": "Datos inválidos", "detalles": e.messages}), 400
+    except Exception as e:
+        logger.error(f"Error en marcar_pagado: {str(e)}")
+        return jsonify({"error": f"Error interno: {str(e)}"}), 500
+
+
+# ============================================================================
+# PUT /api/pagos/{pago_id} - Actualizar Pago (propina, etc)
 # ============================================================================
 @bp.route('/<int:pago_id>', methods=['PUT'])
 @jwt_required()
 def actualizar_pago(pago_id):
     """
-    Actualizar pago (propina, estatus solo su sucursal)
+    Actualizar datos del pago (propina, etc).
+    ---
+    tags:
+      - Pagos
+    summary: Actualizar pago
+    description: Actualiza campos del pago como propina.
+    parameters:
+      - in: path
+        name: pago_id
+        type: integer
+        required: true
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              propina:
+                type: number
+    responses:
+      200:
+        description: Pago actualizado
+      404:
+        description: Pago no existe
+      403:
+        description: Sin acceso
     """
     try:
-        usuario_id = get_jwt_identity()
+        current_user = get_jwt_identity()
+        usuario_id = current_user.get('id_usuario')
         data = request.get_json()
         
-        from src.core.db.session_manager import get_db_session
-        with get_db_session() as session:
-            pago = session.query(Pago).get(pago_id)
-            
-            if not pago:
-                return {'success': False, 'error': 'Pago no existe'}, 404
-            
-            # Validar acceso
-            if not validar_pertenencia_sucursal(usuario_id, pago):
-                return {'success': False, 'error': 'FORBIDDEN'}, 403
-            
-            # Actualizar campos
-            if 'propina' in data:
-                pago.propina = data['propina']
-            if 'estatus' in data:
-                pago.estatus = data['estatus']
-            
-            session.commit()
-            logger.info(f"Pago {pago_id} actualizado por usuario {usuario_id}")
-            
-            return {
-                'success': True,
-                'data': pago.to_dict(),
-                'message': 'Pago actualizado'
-            }, 200
+        result = PagoService.actualizar_pago(
+            pago_id=pago_id,
+            propina=data.get('propina'),
+            usuario_id=usuario_id
+        )
+        
+        if not result['success']:
+            if 'no existe' in result.get('error', ''):
+                return jsonify({"error": result['error']}), 404
+            else:
+                return jsonify({"error": result['error']}), 400
+        
+        return jsonify({
+            "message": "Pago actualizado",
+            "pago": result['data']
+        }), 200
             
     except Exception as e:
         logger.error(f"Error actualizando pago {pago_id}: {str(e)}")
-        return {'success': False, 'error': 'Error interno'}, 500
+        return jsonify({"error": f"Error interno: {str(e)}"}), 500
 
 
 # ============================================================================
-# DELETE /api/pagos/{id} - Eliminar Pago (Soft, SOLO ADMIN)
+# DELETE /api/pagos/{pago_id} - Cancelar Pago (Soft Delete, SOLO ADMIN)
 # ============================================================================
 @bp.route('/<int:pago_id>', methods=['DELETE'])
 @jwt_required()
 def eliminar_pago(pago_id):
     """
-    Eliminar pago - SOLO ADMIN (soft delete)
+    Cancelar pago - SOLO ADMIN.
+    ---
+    tags:
+      - Pagos
+    summary: Cancelar pago
+    description: Soft delete - cambia estatus a voided/cancelado. Solo admins.
+    parameters:
+      - in: path
+        name: pago_id
+        type: integer
+        required: true
+    responses:
+      200:
+        description: Pago cancelado exitosamente
+      403:
+        description: Sin permisos
+      404:
+        description: Pago no existe
     """
     try:
-        usuario_id = get_jwt_identity()
+        current_user = get_jwt_identity()
+        usuario_id = current_user.get('id_usuario')
         
         # Validar que es admin
         if not es_admin(usuario_id):
-            return {'success': False, 'error': 'FORBIDDEN'}, 403
+            return jsonify({"error": "Solo administradores pueden cancelar pagos"}), 403
         
-        from src.core.db.session_manager import get_db_session
-        with get_db_session() as session:
-            pago = session.query(Pago).get(pago_id)
-            
-            if not pago:
-                return {'success': False, 'error': 'Pago no existe'}, 404
-            
-            # Soft delete: cambiar estatus
-            pago.estatus = 3  # 3 = Voided/Cancelado
-            session.commit()
-            logger.info(f"Pago {pago_id} marcado voided por admin {usuario_id}")
-            
-            return {
-                'success': True,
-                'message': 'Pago cancelado'
-            }, 200
+        result = PagoService.cancelar_pago(pago_id, usuario_id)
+        
+        if not result['success']:
+            if 'no existe' in result.get('error', ''):
+                return jsonify({"error": result['error']}), 404
+            else:
+                return jsonify({"error": result['error']}), 400
+        
+        return jsonify({
+            "message": "Pago cancelado exitosamente"
+        }), 200
             
     except Exception as e:
-        logger.error(f"Error eliminando pago {pago_id}: {str(e)}")
-        return {'success': False, 'error': 'Error interno'}, 500
+        logger.error(f"Error cancelando pago {pago_id}: {str(e)}")
+        return jsonify({"error": f"Error interno: {str(e)}"}), 500

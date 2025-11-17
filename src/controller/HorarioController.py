@@ -142,6 +142,45 @@ def obtener_horario(id_horario):
             "message": str(e)
         }), 500
 
+@horario_bp.route('usuarios_asignados/<int:id_horario>', methods=['GET'])
+@jwt_required()
+def obtener_horario_usuarios_asignados(id_horario):
+    """
+    Obtener total de usuarios asignados a un horario específico
+    ---
+    tags:
+      - Horarios
+    summary: Obtener total de usuarios asignados a un horario
+    description: Retorna el conteo de usuarios que tienen asignado el horario especificado
+    parameters:
+      - in: path
+        name: id_horario
+        required: true
+        type: integer
+        description: ID del horario
+    responses:
+      200:
+        description: Conteo de usuarios asignados
+      404:
+        description: Horario no encontrado
+      500:
+        description: Error interno del servidor
+    """
+    try:
+        resultado = HorarioService.obtener_usuarios_asignados(id_horario)
+        
+        if resultado['success']:
+            return jsonify(resultado), 200
+        else:
+            return jsonify(resultado), 404
+        
+    except Exception as e:
+        logger.error(f"Error en obtener_horario_usuarios_asignados: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": "SERVER_ERROR",
+            "message": str(e)
+        }), 500
 
 @horario_bp.route('/<int:sucursal_id>', methods=['GET'])
 @jwt_required()
@@ -152,9 +191,7 @@ def listar_horarios(sucursal_id):
     tags:
       - Horarios
     summary: Listar horarios por sucursal
-    description: Retorna una lista de horarios activos de una sucursal específica
-    security:
-      - Bearer: []
+    description: Retorna una lista de horarios activos de una sucursal específica, con count de usuarios asignados
     parameters:
       - in: path
         name: sucursal_id
@@ -163,12 +200,39 @@ def listar_horarios(sucursal_id):
         description: ID de la sucursal
     responses:
       200:
-        description: Lista de horarios
+        description: Lista de horarios con usuarios asignados
+        schema:
+          type: object
+          properties:
+            success:
+              type: boolean
+            horarios:
+              type: array
+              items:
+                type: object
+                properties:
+                  id_horario:
+                    type: integer
+                  sucursal_id:
+                    type: integer
+                  clave:
+                    type: string
+                  nombre:
+                    type: string
+                  descripcion:
+                    type: string
+                  usuarios_asignados:
+                    type: integer
+                    description: Total de usuarios con este horario asignado
+                  es_activo:
+                    type: boolean
+            count:
+              type: integer
       500:
         description: Error interno del servidor
     """
     try:
-        resultado = HorarioService.listar_horarios_por_sucursal(sucursal_id)
+        resultado = HorarioService.listar_horarios_con_usuarios(sucursal_id)
         return jsonify(resultado), 200
         
     except Exception as e:
