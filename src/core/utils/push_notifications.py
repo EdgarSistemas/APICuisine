@@ -35,9 +35,14 @@ def inicializar_firebase(credentials_path: Optional[str] = None) -> bool:
     """
     Inicializa Firebase Admin SDK con el archivo de credenciales.
     
+    Intenta cargar credenciales en este orden:
+    1. Ruta explícita pasada como parámetro
+    2. Variable de entorno FIREBASE_CREDENTIALS_PATH
+    3. Variable de entorno GOOGLE_APPLICATION_CREDENTIALS
+    4. Ruta por defecto en src/config/
+    
     Args:
-        credentials_path (str): Ruta al archivo JSON de credenciales de Firebase
-                              Si no se proporciona, intenta usar la ruta por defecto
+        credentials_path (str): Ruta al archivo JSON de credenciales de Firebase (opcional)
     
     Returns:
         bool: True si se inicializó correctamente, False en caso de error
@@ -48,43 +53,74 @@ def inicializar_firebase(credentials_path: Optional[str] = None) -> bool:
     global _firebase_initialized, _credentials_path
     
     if not FIREBASE_AVAILABLE:
-        logger.error("Firebase Admin SDK no está instalado")
+        logger.error("❌ Firebase Admin SDK no está instalado")
         return False
     
     if _firebase_initialized:
-        logger.info("Firebase ya estaba inicializado")
+        logger.info("✅ Firebase ya estaba inicializado")
         return True
     
     try:
-        # Determinar ruta de credenciales
-        if not credentials_path:
-            # Buscar en la ruta por defecto del proyecto
+        # Determinar ruta de credenciales (orden de prioridad)
+        final_credentials_path = None
+        
+        # 1. Parámetro explícito
+        if credentials_path and os.path.exists(credentials_path):
+            final_credentials_path = credentials_path
+            logger.debug(f"Usando credentials_path del parámetro: {credentials_path}")
+        
+        # 2. Variable de entorno FIREBASE_CREDENTIALS_PATH
+        if not final_credentials_path:
+            env_path = os.environ.get('FIREBASE_CREDENTIALS_PATH')
+            if env_path and os.path.exists(env_path):
+                final_credentials_path = env_path
+                logger.debug(f"Usando FIREBASE_CREDENTIALS_PATH: {env_path}")
+        
+        # 3. Variable de entorno GOOGLE_APPLICATION_CREDENTIALS
+        if not final_credentials_path:
+            env_path = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')
+            if env_path and os.path.exists(env_path):
+                final_credentials_path = env_path
+                logger.debug(f"Usando GOOGLE_APPLICATION_CREDENTIALS: {env_path}")
+        
+        # 4. Ruta por defecto en src/config/
+        if not final_credentials_path:
             default_path = os.path.join(
                 os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
                 'config',
                 'push-notifications-cuisine-firebase-adminsdk-fbsvc-fd0c21cd4a.json'
             )
-            credentials_path = default_path if os.path.exists(default_path) else None
+            if os.path.exists(default_path):
+                final_credentials_path = default_path
+                logger.debug(f"Usando ruta por defecto: {default_path}")
         
-        if not credentials_path:
-            logger.error("No se encontró archivo de credenciales de Firebase")
-            return False
-        
-        if not os.path.exists(credentials_path):
-            logger.error(f"Archivo de credenciales no existe: {credentials_path}")
+        if not final_credentials_path:
+            logger.error(
+                "❌ No se encontró archivo de credenciales de Firebase.\n"
+                "   Opciones:\n"
+                "   1. Asegurar que el archivo existe en: src/config/push-notifications-cuisine-firebase-adminsdk-fbsvc-fd0c21cd4a.json\n"
+                "   2. O configurar variable de entorno: FIREBASE_CREDENTIALS_PATH=/ruta/al/archivo.json\n"
+                "   3. O configurar variable de entorno: GOOGLE_APPLICATION_CREDENTIALS=/ruta/al/archivo.json"
+            )
             return False
         
         # Inicializar Firebase
-        cred = credentials.Certificate(credentials_path)
+        cred = credentials.Certificate(final_credentials_path)
         firebase_admin.initialize_app(cred)
         
         _firebase_initialized = True
-        _credentials_path = credentials_path
-        logger.info(f"Firebase inicializado correctamente desde: {credentials_path}")
+        _credentials_path = final_credentials_path
+        logger.info(f"✅ Firebase inicializado correctamente desde: {final_credentials_path}")
         return True
         
+    except FileNotFoundError as e:
+        logger.error(f"❌ Archivo de credenciales no encontrado: {str(e)}")
+        return False
+    except ValueError as e:
+        logger.error(f"❌ Error al procesar credenciales JSON: {str(e)}")
+        return False
     except Exception as e:
-        logger.error(f"Error inicializando Firebase: {str(e)}")
+        logger.error(f"❌ Error inesperado inicializando Firebase: {str(e)}", exc_info=True)
         return False
 
 

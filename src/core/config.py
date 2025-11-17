@@ -46,8 +46,10 @@ class Config:
     POOL_TIMEOUT = int(os.environ.get('POOL_TIMEOUT', 30))
     POOL_RECYCLE = int(os.environ.get('POOL_RECYCLE', 3600))
     
-    # COnfiguracion de Firebase
-    FIREBASE_PROJECT_ID = os.environ.get('FIREBASE_PROJECT_ID')
+    # Configuración de Firebase
+    FIREBASE_PROJECT_ID = os.environ.get('FIREBASE_PROJECT_ID', 'push-notifications-cuisine')
+    FIREBASE_CREDENTIALS_PATH = os.environ.get('FIREBASE_CREDENTIALS_PATH')
+    # GOOGLE_APPLICATION_CREDENTIALS se usa como fallback si FIREBASE_CREDENTIALS_PATH no está definida
     GOOGLE_APPLICATION_CREDENTIALS = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')
     
     # Configuración SMTP para emails
