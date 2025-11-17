@@ -353,3 +353,4 @@ class PushTokenDAO:
             
             logger.info(f"Se obtuvieron {len(tokens_list)} push tokens para sucursal {sucursal_id}")
             return tokens_list
+

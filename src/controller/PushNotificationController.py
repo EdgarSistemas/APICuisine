@@ -605,13 +605,19 @@ def verificar_stock_todas_sucursales():
             
             if usuarios_gerentes:
                 tokens_gerentes = []
-                for usuario_data in usuarios_gerentes:
-                    tokens_gerentes.extend([t['token'] for t in usuario_data['push_tokens']])
+                plataformas_gerentes = {}  # token -> plataforma
                 
-                logger.info(f"Sucursal {sucursal_id}: Enviando alerta a {len(usuarios_gerentes)} gerentes")
+                for usuario_data in usuarios_gerentes:
+                    for token_data in usuario_data['push_tokens']:
+                        token = token_data['token']
+                        tokens_gerentes.append(token)
+                        plataformas_gerentes[token] = token_data.get('plataforma', 'desconocida')
+                
+                logger.info(f"Sucursal {sucursal_id}: Enviando alerta a {len(usuarios_gerentes)} gerentes ({len(tokens_gerentes)} tokens)")
                 resultado_gerentes = FCMNotificationService.enviar_notificacion_multiple_insumos(
                     insumos_bajo_stock=insumos_bajo_stock,
                     tokens=tokens_gerentes,
+                    plataformas=plataformas_gerentes,
                     sucursal_nombre=f"Sucursal {sucursal_id} - ALERTA GERENTES"
                 )
                 notificaciones_gerentes = resultado_gerentes['mensajes_exitosos']
@@ -631,13 +637,19 @@ def verificar_stock_todas_sucursales():
             
             if usuarios_compras:
                 tokens_compras = []
-                for usuario_data in usuarios_compras:
-                    tokens_compras.extend([t['token'] for t in usuario_data['push_tokens']])
+                plataformas_compras = {}  # token -> plataforma
                 
-                logger.info(f"Sucursal {sucursal_id}: Enviando alerta a {len(usuarios_compras)} usuarios COMPRAS")
+                for usuario_data in usuarios_compras:
+                    for token_data in usuario_data['push_tokens']:
+                        token = token_data['token']
+                        tokens_compras.append(token)
+                        plataformas_compras[token] = token_data.get('plataforma', 'desconocida')
+                
+                logger.info(f"Sucursal {sucursal_id}: Enviando alerta a {len(usuarios_compras)} usuarios COMPRAS ({len(tokens_compras)} tokens)")
                 resultado_compras = FCMNotificationService.enviar_notificacion_multiple_insumos(
                     insumos_bajo_stock=insumos_bajo_stock,
                     tokens=tokens_compras,
+                    plataformas=plataformas_compras,
                     sucursal_nombre=f"Sucursal {sucursal_id} - ALERTA COMPRAS"
                 )
                 notificaciones_compras = resultado_compras['mensajes_exitosos']

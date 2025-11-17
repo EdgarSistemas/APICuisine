@@ -10,6 +10,7 @@ Funciones para:
 import logging
 import os
 import json
+import requests
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -97,7 +98,8 @@ class FCMNotificationService:
         cuerpo: str,
         datos_personalizados: Optional[Dict[str, str]] = None,
         icono: Optional[str] = None,
-        imagen: Optional[str] = None
+        imagen: Optional[str] = None,
+        plataformas: Optional[Dict[str, str]] = None
     ) -> Dict[str, Any]:
         """
         Envía una notificación a uno o múltiples dispositivos.
@@ -109,6 +111,7 @@ class FCMNotificationService:
             datos_personalizados (Dict): Datos adicionales para enviar (opcional)
             icono (str): URL del icono (opcional)
             imagen (str): URL de la imagen de la notificación (opcional)
+            plataformas (Dict): Mapeo token -> plataforma ej: {'token1': 'web', 'token2': 'android'} (opcional)
             
         Returns:
             Dict con:
@@ -157,73 +160,85 @@ class FCMNotificationService:
             logger.warning(f"Se proporcionaron {len(tokens)} tokens. FCM permite máximo 500 por llamada.")
             # Procesar en lotes de 500
             return FCMNotificationService._enviar_en_lotes(
-                tokens, titulo, cuerpo, datos_personalizados, icono, imagen
+                tokens, titulo, cuerpo, datos_personalizados, icono, imagen, plataformas
             )
         
         try:
-            # Construir notificación
+            # Enviar a múltiples dispositivos
+            mensajes_exitosos = 0
+            mensajes_fallidos = 0
+            tokens_fallidos = []
+            detalles_error = []
+            
+            # Construir notificación una sola vez
             notificacion = messaging.Notification(
                 title=titulo,
                 body=cuerpo,
                 image=imagen
             )
             
-            # Construir opciones de Android
-            config_android = messaging.AndroidConfig(
-                priority="high",
-                notification=messaging.AndroidNotification(
-                    title=titulo,
-                    body=cuerpo,
-                    icon=icono or "ic_notification",
-                    image=imagen
-                )
-            )
-            
-            # Construir opciones de WebPush
-            config_web = messaging.WebpushConfig(
-                notification=messaging.WebpushNotification(
-                    title=titulo,
-                    body=cuerpo,
-                    icon=icono,
-                    image=imagen
-                )
-            )
-            
-            # Enviar a múltiples dispositivos (uno por uno)
-            mensajes_exitosos = 0
-            mensajes_fallidos = 0
-            tokens_fallidos = []
-            detalles_error = []
-            
+            # Enviar a cada token individualmente con manejo de errores robusto
             for token in tokens:
                 try:
-                    msg = messaging.Message(
-                        token=token,
-                        notification=notificacion,
-                        data=datos_personalizados or {},
-                        android=config_android,
-                        webpush=config_web
-                    )
-                    messaging.send(msg)
+                    # Detectar plataforma del token
+                    plataforma = None
+                    if plataformas and token in plataformas:
+                        plataforma = plataformas[token]
+                    
+                    # Construir mensaje adaptado a la plataforma
+                    msg_kwargs = {
+                        "token": token,
+                        "notification": notificacion,
+                        "data": datos_personalizados or {}
+                    }
+                    
+                    # Para tokens web, agregar configuración específica
+                    if plataforma == 'web':
+                        # Webpush config recomendado para PWA
+                        webpush_config = messaging.WebpushConfig(
+                            headers={
+                                "TTL": "3600"  # 1 hora
+                            },
+                            notification=messaging.WebpushNotification(
+                                title=titulo,
+                                body=cuerpo,
+                                icon=icono or ""
+                            )
+                        )
+                        msg_kwargs["webpush"] = webpush_config
+                        logger.info(f"Token web detectado: {token[:30]}... - Usando WebpushConfig")
+                    
+                    msg = messaging.Message(**msg_kwargs)
+                    
+                    # Log detallado del token para debugging
+                    logger.info(f"Enviando a token {token[:30]}... (plataforma: {plataforma or 'desconocida'}, longitud: {len(token)} chars)")
+                    
+                    resp = messaging.send(msg, dry_run=False)
+                    logger.info(f"Mensaje enviado exitosamente: {resp}")
                     mensajes_exitosos += 1
+                    
                 except Exception as e:
+                    error_msg = str(e)
+                    logger.warning(f"Token {token[:30]}... (plataforma: {plataforma or 'desconocida'}) falló: {error_msg}")
                     mensajes_fallidos += 1
                     tokens_fallidos.append(token)
                     detalles_error.append({
-                        "token": token[:20] + "...",
-                        "error": str(e)
+                        "token": token[:30] + "...",
+                        "plataforma": plataforma or "desconocida",
+                        "error": error_msg
                     })
             
+            # Si al menos uno fue exitoso, marcar como success
             resultado = {
-                "success": mensajes_fallidos == 0,
+                "success": mensajes_exitosos > 0,
                 "mensajes_exitosos": mensajes_exitosos,
                 "mensajes_fallidos": mensajes_fallidos,
                 "tokens_fallidos": tokens_fallidos,
                 "detalles_error": detalles_error,
-                "timestamp": datetime.now(ZoneInfo("America/Mexico_City")).isoformat()
+                 "timestamp": datetime.now(ZoneInfo("America/Mexico_City")).isoformat()
             }
             
-            logger.info(f"Notificaciones enviadas: {mensajes_exitosos} exitosas, {mensajes_fallidos} fallidas")
+            logger.info(f"Notificaciones: {mensajes_exitosos} exitosas, {mensajes_fallidos} fallidas")
             return resultado
             
         except Exception as e:
@@ -246,7 +261,8 @@ class FCMNotificationService:
         cuerpo: str,
         datos_personalizados: Optional[Dict[str, str]] = None,
         icono: Optional[str] = None,
-        imagen: Optional[str] = None
+        imagen: Optional[str] = None,
+        plataformas: Optional[Dict[str, str]] = None
     ) -> Dict[str, Any]:
         """
         Envía notificaciones en lotes de 500 tokens (límite de FCM).
@@ -266,8 +282,13 @@ class FCMNotificationService:
         
         for i in range(0, len(tokens), 500):
             lote = tokens[i:i+500]
+            # Extraer plataformas para este lote
+            plataformas_lote = None
+            if plataformas:
+                plataformas_lote = {t: plataformas[t] for t in lote if t in plataformas}
+            
             resultado_lote = FCMNotificationService.enviar_notificacion_simple(
-                lote, titulo, cuerpo, datos_personalizados, icono, imagen
+                lote, titulo, cuerpo, datos_personalizados, icono, imagen, plataformas_lote
             )
             
             resultados_totales["mensajes_exitosos"] += resultado_lote["mensajes_exitosos"]
@@ -341,7 +362,8 @@ class FCMNotificationService:
     def enviar_notificacion_multiple_insumos(
         insumos_bajo_stock: List[Dict[str, Any]],
         tokens: List[str],
-        sucursal_nombre: Optional[str] = None
+        sucursal_nombre: Optional[str] = None,
+        plataformas: Optional[Dict[str, str]] = None
     ) -> Dict[str, Any]:
         """
         Envía una notificación sobre múltiples insumos con stock bajo.
@@ -358,6 +380,7 @@ class FCMNotificationService:
                 ]
             tokens (List[str]): Lista de push tokens
             sucursal_nombre (str): Nombre de la sucursal (opcional)
+            plataformas (Dict): Mapeo token -> plataforma (opcional)
             
         Returns:
             Dict con resultado del envío
@@ -388,7 +411,8 @@ class FCMNotificationService:
             titulo=titulo,
             cuerpo=cuerpo,
             datos_personalizados=datos,
-            icono="ic_inventory"
+            icono="ic_inventory",
+            plataformas=plataformas
         )
 
 
