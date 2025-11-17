@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 # Configuración global de Firebase
 _firebase_initialized = False
+_firebase_client = None
 _credentials_path = None
 
 
@@ -50,14 +51,14 @@ def inicializar_firebase(credentials_path: Optional[str] = None) -> bool:
     Example:
         inicializar_firebase('/ruta/a/firebase-adminsdk.json')
     """
-    global _firebase_initialized, _credentials_path
+    global _firebase_initialized, _credentials_path, _firebase_client
     
     if not FIREBASE_AVAILABLE:
         logger.error("❌ Firebase Admin SDK no está instalado")
         return False
     
-    if _firebase_initialized:
-        logger.info("✅ Firebase ya estaba inicializado")
+    if _firebase_initialized and _firebase_client:
+        logger.debug("✅ Firebase ya estaba inicializado")
         return True
     
     try:
@@ -105,19 +106,24 @@ def inicializar_firebase(credentials_path: Optional[str] = None) -> bool:
             return False
         
         # Inicializar Firebase
-        cred = credentials.Certificate(final_credentials_path)
-        firebase_admin.initialize_app(cred)
-        
-        _firebase_initialized = True
-        _credentials_path = final_credentials_path
-        logger.info(f"✅ Firebase inicializado correctamente desde: {final_credentials_path}")
-        return True
+        try:
+            cred = credentials.Certificate(final_credentials_path)
+            _firebase_client = firebase_admin.initialize_app(cred)
+            _firebase_initialized = True
+            _credentials_path = final_credentials_path
+            logger.info(f"✅ Firebase inicializado correctamente desde: {final_credentials_path}")
+            return True
+        except ValueError as e:
+            # Firebase ya fue inicializado en otro lugar
+            if "already initialized" in str(e):
+                _firebase_initialized = True
+                logger.info("✅ Firebase ya estaba inicializado en otro lugar")
+                return True
+            logger.error(f"❌ Error al procesar credenciales JSON: {str(e)}")
+            return False
         
     except FileNotFoundError as e:
         logger.error(f"❌ Archivo de credenciales no encontrado: {str(e)}")
-        return False
-    except ValueError as e:
-        logger.error(f"❌ Error al procesar credenciales JSON: {str(e)}")
         return False
     except Exception as e:
         logger.error(f"❌ Error inesperado inicializando Firebase: {str(e)}", exc_info=True)

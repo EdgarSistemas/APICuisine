@@ -19,23 +19,34 @@ logger = logging.getLogger(__name__)
 # Blueprint para notificaciones push
 bp = Blueprint('push_notifications', __name__, url_prefix='/api/push-notifications')
 
-# Inicializar Firebase al cargar el módulo - SOLO si está disponible
+# Firebase se inicializará de forma perezosa (lazy) cuando sea necesario
+# NO se intenta al importar el módulo para evitar problemas en Azure
 firebase_init_success = False
-try:
-    firebase_init_success = inicializar_firebase()
-    if firebase_init_success:
-        logger.info("✅ Firebase inicializado correctamente en el controlador")
-    else:
-        logger.warning(
-            "⚠️  Firebase no se inicializó correctamente.\n"
-            "Las notificaciones push NO funcionarán hasta que se configure correctamente.\n"
-            "Por favor, verifica:\n"
-            "- El archivo de credenciales existe en: src/config/push-notifications-cuisine-firebase-adminsdk-fbsvc-fd0c21cd4a.json\n"
-            "- O configura la variable de entorno FIREBASE_CREDENTIALS_PATH o GOOGLE_APPLICATION_CREDENTIALS"
-        )
-except Exception as e:
-    logger.error(f"❌ Error crítico al inicializar Firebase: {str(e)}", exc_info=True)
-    firebase_init_success = False
+
+
+def _asegurar_firebase_inicializado():
+    """
+    Asegura que Firebase esté inicializado antes de enviar notificaciones.
+    Se ejecuta de forma perezosa solo cuando se necesita.
+    """
+    global firebase_init_success
+    if not firebase_init_success:
+        try:
+            firebase_init_success = inicializar_firebase()
+            if firebase_init_success:
+                logger.info("✅ Firebase inicializado correctamente")
+            else:
+                logger.error(
+                    "❌ Firebase no se inicializó correctamente.\n"
+                    "Las notificaciones push NO funcionarán.\n"
+                    "Verifica:\n"
+                    "- El archivo de credenciales existe en: src/config/push-notifications-cuisine-firebase-adminsdk-fbsvc-fd0c21cd4a.json\n"
+                    "- O configura: FIREBASE_CREDENTIALS_PATH o GOOGLE_APPLICATION_CREDENTIALS"
+                )
+        except Exception as e:
+            logger.error(f"❌ Error al inicializar Firebase: {str(e)}", exc_info=True)
+            firebase_init_success = False
+    return firebase_init_success
 
 # Variable de configuración para Azure Functions (en producción, usar variables de entorno)
 AZURE_FUNCTION_SECRET_KEY = "azure-stock-alerts-2025"  # TODO: Usar env variable
@@ -127,6 +138,14 @@ def enviar_notificacion_simple():
         
         datos_personalizados = data.get('datos_personalizados')
         icono = data.get('icono')
+        
+        # Asegurar que Firebase está inicializado
+        if not _asegurar_firebase_inicializado():
+            return jsonify({
+                'success': False,
+                'error': 'FIREBASE_NOT_INITIALIZED',
+                'message': 'Firebase no está inicializado. Verifica las credenciales.'
+            }), 500
         
         # Enviar notificación
         resultado = FCMNotificationService.enviar_notificacion_simple(
@@ -220,6 +239,14 @@ def enviar_alerta_stock_bajo():
             }), 400
         
         sucursal_nombre = data.get('sucursal_nombre')
+        
+        # Asegurar que Firebase está inicializado
+        if not _asegurar_firebase_inicializado():
+            return jsonify({
+                'success': False,
+                'error': 'FIREBASE_NOT_INITIALIZED',
+                'message': 'Firebase no está inicializado. Verifica las credenciales.'
+            }), 500
         
         # Enviar alerta
         resultado = FCMNotificationService.enviar_notificacion_stock_bajo(
@@ -358,6 +385,14 @@ def enviar_alertas_stock_bajo_sucursal():
         for usuario_data in usuarios_push:
             for token_info in usuario_data['push_tokens']:
                 todos_tokens.append(token_info['token'])
+        
+        # Asegurar que Firebase está inicializado
+        if not _asegurar_firebase_inicializado():
+            return jsonify({
+                'success': False,
+                'error': 'FIREBASE_NOT_INITIALIZED',
+                'message': 'Firebase no está inicializado. Verifica las credenciales.'
+            }), 500
         
         # 4. Enviar notificación de múltiples insumos
         resultado_envio = FCMNotificationService.enviar_notificacion_multiple_insumos(
@@ -562,6 +597,14 @@ def verificar_stock_todas_sucursales():
         from datetime import datetime
         from zoneinfo import ZoneInfo
         tz_mexico = ZoneInfo("America/Mexico_City")
+        
+        # Asegurar que Firebase está inicializado ANTES de procesar
+        if not _asegurar_firebase_inicializado():
+            return jsonify({
+                'success': False,
+                'error': 'FIREBASE_NOT_INITIALIZED',
+                'message': 'Firebase no está inicializado. Verifica las credenciales.'
+            }), 500
         
         logger.info(f"[{datetime.now(tz_mexico)}] Iniciando verificación de stock en todas sucursales")
         
