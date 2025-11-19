@@ -114,7 +114,6 @@ def expirar_holds_vencidos():
 
 
 @jobs_bp.route('/verificar-no-shows', methods=['POST'])
-@jwt_required()
 def verificar_no_shows():
     """
     POST /api/jobs/verificar-no-shows
