@@ -9,8 +9,12 @@ from src.models.operaciones.hold_mesa_model import HoldMesa
 from src.core.db.session_manager import get_db_session
 from src.schemas.reserva_schema import HoldMesaResponseSchema
 import logging
+import pytz
 
 logger = logging.getLogger(__name__)
+
+# Zona horaria de México
+TZ_MEXICO = pytz.timezone('America/Mexico_City')
 
 
 class HoldMesaDAO:
@@ -23,8 +27,9 @@ class HoldMesaDAO:
         actor_usuario_id: int,
         inicio: datetime,
         fin_estimado: datetime,
-        ttl_minutes: int = 5,
-        notas: str = None
+        ttl_minutes: int = 3,
+        notas: str = None,
+        horas: int = None
     ) -> dict:
         """
         Crear nuevo hold de mesa.
@@ -43,8 +48,11 @@ class HoldMesaDAO:
         """
         schema = HoldMesaResponseSchema()
         with get_db_session() as session:
-            # Calcular expires_at
-            expires_at = datetime.now() + timedelta(minutes=ttl_minutes)
+            # Obtener hora actual en zona de México (SIN timezone para SQL Server)
+            ahora_mexico = datetime.now(TZ_MEXICO).replace(tzinfo=None)
+            
+            # Calcular expires_at en zona de México
+            expires_at = ahora_mexico + timedelta(minutes=ttl_minutes)
             
             hold = HoldMesa(
                 mesa_id=mesa_id,
@@ -54,11 +62,17 @@ class HoldMesaDAO:
                 fin_estimado=fin_estimado,
                 expires_at=expires_at,
                 estatus=1,  # Activo
-                notas=notas
+                notas=notas,
+                horas=horas
             )
             session.add(hold)
             session.commit()
-            logger.info(f"Hold creado: ID {hold.id_hold_mesa} para mesa {mesa_id}, expira en {ttl_minutes} min")
+            
+            print(f"\n[CREAR HOLD] ✓ ID={hold.id_hold_mesa}, Mesa={mesa_id}, Estatus={hold.estatus}, Expira={expires_at}")
+            logger.info(
+                f"[HOLD] Creado: ID={hold.id_hold_mesa}, Mesa={mesa_id}, "
+                f"Expira en {ttl_minutes}min a {expires_at} (zona México)"
+            )
             return schema.dump(hold)
     
     
@@ -89,6 +103,8 @@ class HoldMesaDAO:
         - No hay holds activos que se traslapen
         - No hay reservas programadas/en_curso que se traslapen
         
+        NOTA: Todas las fechas están en zona de México.
+        
         Args:
             mesa_id: ID de la mesa
             inicio: Fecha/hora inicio deseada
@@ -98,14 +114,19 @@ class HoldMesaDAO:
             True si está disponible, False si hay conflicto
         """
         with get_db_session() as session:
-            ahora = datetime.now()
+            # Obtener hora actual en zona de México
+            ahora_mexico = datetime.now(TZ_MEXICO).replace(tzinfo=None)
+            
+            print(f"\n[VERIFICAR_DISPONIBLE] Comprobando disponibilidad")
+            print(f"  Mesa {mesa_id}, Rango: {inicio} - {fin_estimado}")
+            print(f"  Ahora (México): {ahora_mexico}")
             
             # Verificar holds activos (estatus=1) que no hayan expirado
             holds_activos = session.query(HoldMesa).filter(
                 and_(
                     HoldMesa.mesa_id == mesa_id,
                     HoldMesa.estatus == 1,  # Activo
-                    HoldMesa.expires_at > ahora,  # No expirado
+                    HoldMesa.expires_at > ahora_mexico,  # No expirado (zona México)
                     or_(
                         # Traslape: nuevo inicio está dentro de hold existente
                         and_(HoldMesa.inicio <= inicio, HoldMesa.fin_estimado > inicio),
@@ -118,6 +139,7 @@ class HoldMesaDAO:
             ).first()
             
             if holds_activos:
+                print(f"  ⚠️  Conflicto: Hold activo encontrado (ID={holds_activos.id_hold_mesa})")
                 logger.warning(f"Mesa {mesa_id} tiene hold activo en rango {inicio} - {fin_estimado}")
                 return False
             
@@ -139,9 +161,11 @@ class HoldMesaDAO:
             ).first()
             
             if reservas_activas:
+                print(f"  ⚠️  Conflicto: Reserva activa encontrada (ID={reservas_activas.id_reserva})")
                 logger.warning(f"Mesa {mesa_id} tiene reserva activa en rango {inicio} - {fin_estimado}")
                 return False
             
+            print(f"  ✓ Mesa disponible")
             return True
     
     
@@ -156,6 +180,7 @@ class HoldMesaDAO:
         Returns:
             Dict actualizado o None
         """
+        print(f"\n[⚠️ CANCELAR_HOLD] ID={hold_id}")
         schema = HoldMesaResponseSchema()
         with get_db_session() as session:
             hold = session.query(HoldMesa).filter(
@@ -165,8 +190,10 @@ class HoldMesaDAO:
             if not hold:
                 return None
             
+            print(f"[⚠️ CANCELAR_HOLD] Estatus anterior: {hold.estatus}")
             hold.estatus = 4  # Cancelado
-            hold.updated_at = datetime.now()
+            # Usar zona de México para updated_at
+            hold.updated_at = datetime.now(TZ_MEXICO).replace(tzinfo=None)
             session.commit()
             logger.info(f"Hold {hold_id} cancelado")
             return schema.dump(hold)
@@ -184,6 +211,7 @@ class HoldMesaDAO:
         Returns:
             Dict actualizado o None
         """
+        print(f"\n[⚠️ CONFIRMAR_HOLD] ID={hold_id}")
         schema = HoldMesaResponseSchema()
         with get_db_session() as session:
             hold = session.query(HoldMesa).filter(
@@ -193,50 +221,21 @@ class HoldMesaDAO:
             if not hold:
                 return None
             
+            print(f"[⚠️ CONFIRMAR_HOLD] Estatus anterior: {hold.estatus}")
             hold.estatus = 2  # Confirmado
-            hold.updated_at = datetime.now()
+            # Usar zona de México para updated_at
+            hold.updated_at = datetime.now(TZ_MEXICO).replace(tzinfo=None)
             session.commit()
             logger.info(f"Hold {hold_id} confirmado (convertido a reserva)")
             return schema.dump(hold)
     
     
     @staticmethod
-    def expirar_holds_vencidos() -> int:
-        """
-        Job de limpieza: Marcar como expirados todos los holds activos
-        cuyo expires_at haya pasado.
-        
-        Returns:
-            Cantidad de holds expirados
-        """
-        with get_db_session() as session:
-            ahora = datetime.now()
-            
-            result = session.query(HoldMesa).filter(
-                and_(
-                    HoldMesa.estatus == 1,  # Solo activos
-                    HoldMesa.expires_at <= ahora  # Ya expiró
-                )
-            ).update(
-                {
-                    'estatus': 3,  # Expirado
-                    'updated_at': ahora
-                },
-                synchronize_session=False
-            )
-            
-            session.commit()
-            
-            if result > 0:
-                logger.info(f"Job: {result} holds expirados automáticamente")
-            
-            return result
-    
-    
-    @staticmethod
     def listar_holds_activos(mesa_id: int = None) -> list:
         """
         Listar holds activos (estatus=1) que no hayan expirado.
+        
+        NOTA: Todas las fechas están en zona de México.
         
         Args:
             mesa_id: Filtrar por mesa (opcional)
@@ -246,11 +245,13 @@ class HoldMesaDAO:
         """
         schema = HoldMesaResponseSchema()
         with get_db_session() as session:
-            ahora = datetime.now()
+            # Obtener hora actual en zona de México
+            ahora_mexico = datetime.now(TZ_MEXICO).replace(tzinfo=None)
+            
             query = session.query(HoldMesa).filter(
                 and_(
                     HoldMesa.estatus == 1,
-                    HoldMesa.expires_at > ahora
+                    HoldMesa.expires_at > ahora_mexico  # No expirado (zona México)
                 )
             )
             
@@ -258,7 +259,44 @@ class HoldMesaDAO:
                 query = query.filter(HoldMesa.mesa_id == mesa_id)
             
             holds = query.order_by(HoldMesa.created_at.desc()).all()
+            print(f"\n[LISTAR HOLDS] Encontrados {len(holds)} holds activos en BD (ahora={ahora_mexico})")
+            for h in holds:
+                print(f"  - Hold ID={h.id_hold_mesa}, Estatus={h.estatus}, Expira={h.expires_at}")
             return [schema.dump(h) for h in holds]
+    
+    
+    @staticmethod
+    def cambiar_estatus(hold_id: int, estatus: int) -> bool:
+        """
+        Cambiar estatus de un hold.
+        
+        Args:
+            hold_id: ID del hold
+            estatus: Nuevo estatus (1=Activo, 2=Confirmado, 3=Expirado, 4=Cancelado)
+            
+        Returns:
+            True si se actualizó, False si no existe
+        """
+        with get_db_session() as session:
+            ahora_mexico = datetime.now(TZ_MEXICO).replace(tzinfo=None)
+            
+            # Obtener el hold primero para actualizarlo correctamente
+            hold = session.query(HoldMesa).filter(
+                HoldMesa.id_hold_mesa == hold_id
+            ).first()
+            
+            if not hold:
+                logger.warning(f"Hold {hold_id} no existe para cambiar estatus")
+                return False
+            
+            # Cambiar estatus y updated_at
+            estatus_anterior = hold.estatus
+            hold.estatus = estatus
+            hold.updated_at = ahora_mexico
+            session.commit()
+            
+            logger.info(f"Hold {hold_id} estatus cambiado: {estatus_anterior} → {estatus}")
+            return True
     
     
     @staticmethod
@@ -277,3 +315,61 @@ class HoldMesaDAO:
                 HoldMesa.id_hold_mesa == hold_id
             ).first()
             return existe is not None
+    
+    
+    @staticmethod
+    def limpiar_holds_expirados_manual() -> dict:
+        """
+        Ejecuta expiración de holds INCOMPLETOS de forma síncrona.
+        Útil para debugging, testing y limpieza manual.
+        
+        Solo procesa holds con estatus=1 (incompletos).
+        
+        Returns:
+            Dict con resultado de la operación
+        """
+        try:
+            with get_db_session() as session:
+                ahora_mexico = datetime.now(TZ_MEXICO).replace(tzinfo=None)
+                
+                # SOLO holds INCOMPLETOS (estatus=1)
+                holds_incompletos = session.query(HoldMesa).filter(
+                    HoldMesa.estatus == 1
+                ).all()
+                
+                ids_a_expirar = []
+                for hold in holds_incompletos:
+                    if hold.expires_at <= ahora_mexico:
+                        ids_a_expirar.append(hold.id_hold_mesa)
+                
+                if ids_a_expirar:
+                    result = session.query(HoldMesa).filter(
+                        HoldMesa.id_hold_mesa.in_(ids_a_expirar)
+                    ).update(
+                        {
+                            'estatus': 3,
+                            'updated_at': ahora_mexico
+                        },
+                        synchronize_session=False
+                    )
+                    session.commit()
+                    
+                    return {
+                        "success": True,
+                        "message": f"Se expiraron {result} holds incompletos",
+                        "cantidad_expirados": result
+                    }
+                else:
+                    return {
+                        "success": True,
+                        "message": "No hay holds incompletos para expirar",
+                        "cantidad_expirados": 0
+                    }
+                    
+        except Exception as e:
+            logger.error(f"Error al limpiar holds expirados: {str(e)}")
+            return {
+                "success": False,
+                "message": f"Error al expirar holds: {str(e)}",
+                "cantidad_expirados": 0
+            }

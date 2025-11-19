@@ -3,7 +3,7 @@ HoldMesaService - Business Logic para HoldMesa
 Gestión de holds temporales durante proceso de reserva
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from src.dao.operaciones.hold_mesa_dao import HoldMesaDAO
 from src.dao.catalogos.mesa_dao import MesaDAO
 import logging
@@ -20,8 +20,8 @@ class HoldMesaService:
         mesa_id: int,
         actor_tipo: int,
         inicio: datetime,
-        fin_estimado: datetime,
-        ttl_minutes: int = 5,
+        horas: int,
+        ttl_minutes: int = 3,
         notas: str = None
     ) -> dict:
         """
@@ -54,6 +54,7 @@ class HoldMesaService:
                 return {"success": False, "error": f"Mesa {mesa_id} no está activa"}
             
             # VALIDACIÓN 2: Mesa está disponible en el rango
+            fin_estimado = inicio + timedelta(hours=horas)
             disponible = HoldMesaDAO.verificar_mesa_disponible(mesa_id, inicio, fin_estimado)
             if not disponible:
                 return {
@@ -69,10 +70,16 @@ class HoldMesaService:
                 inicio=inicio,
                 fin_estimado=fin_estimado,
                 ttl_minutes=ttl_minutes,
-                notas=notas
+                notas=notas,
+                horas=horas
             )
             
-            logger.info(f"Hold creado por usuario {usuario_id}: hold_id={hold['id_hold_mesa']}, mesa={mesa_id}")
+            logger.info(
+                f"[HOLD] ✓ Creado exitosamente: "
+                f"ID={hold['id_hold_mesa']}, Mesa={mesa_id}, "
+                f"Usuario={usuario_id}, TTL={ttl_minutes}min, "
+                f"Expira en={hold.get('fechahora_expiracion', 'N/A')}"
+            )
             return {"success": True, "data": hold}
             
         except Exception as e:
@@ -203,3 +210,29 @@ class HoldMesaService:
         except Exception as e:
             logger.error(f"Error en HoldMesaService.verificar_disponibilidad_mesa: {str(e)}")
             return {"success": False, "disponible": False, "error": f"Error al verificar disponibilidad: {str(e)}"}
+    
+    
+    @staticmethod
+    def limpiar_holds_expirados_manual() -> dict:
+        """
+        Ejecutar limpieza manual de holds expirados.
+        Útil para debugging, testing y limpieza manual sin esperar al scheduler.
+        
+        Returns:
+            {success: bool, message: str, cantidad_expirados: int, error?: str}
+        """
+        try:
+            result = HoldMesaDAO.limpiar_holds_expirados_manual()
+            if result['success']:
+                logger.info(f"[HOLD] Limpieza manual: {result['cantidad_expirados']} holds expirados")
+            else:
+                logger.error(f"[HOLD] Error en limpieza manual: {result['message']}")
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error en HoldMesaService.limpiar_holds_expirados_manual: {str(e)}")
+            return {
+                "success": False,
+                "message": f"Error al limpiar holds: {str(e)}",
+                "cantidad_expirados": 0
+            }

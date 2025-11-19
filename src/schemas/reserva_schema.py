@@ -4,6 +4,10 @@ Schemas para HoldMesa y Reserva - Validación con Marshmallow
 
 from marshmallow import Schema, fields, validates, ValidationError, validates_schema
 from datetime import datetime, timedelta
+import pytz
+
+# Zona horaria de México
+TZ_MEXICO = pytz.timezone('America/Mexico_City')
 
 
 # ============================
@@ -16,9 +20,9 @@ class HoldMesaCreateSchema(Schema):
     actor_tipo = fields.Int(required=True)  # 1=Cliente, 2=Recepcionista
     actor_usuario_id = fields.Int(required=False, allow_none=True)
     inicio = fields.DateTime(required=True)
-    fin_estimado = fields.DateTime(required=True)
-    ttl_minutes = fields.Int(required=False, default=5)  # Minutos antes de expirar (default 5)
+    ttl_minutes = fields.Int(required=False, default=3)  # Minutos antes de expirar (default 5)
     notas = fields.Str(required=False, allow_none=True)
+    horas = fields.Integer(required=True)  # Numero de horas a apartar la mesa
     
     @validates('actor_tipo')
     def validate_actor_tipo(self, value):
@@ -57,6 +61,7 @@ class HoldMesaResponseSchema(Schema):
     actor_tipo = fields.Int()
     actor_usuario_id = fields.Int(allow_none=True)
     inicio = fields.DateTime()
+    horas = fields.Int()
     fin_estimado = fields.DateTime()
     expires_at = fields.DateTime()
     estatus = fields.Int()
@@ -72,13 +77,14 @@ class HoldMesaResponseSchema(Schema):
         """Calcula segundos restantes hasta expiración"""
         if obj.estatus != 1:  # Solo si está activo
             return 0
-        ahora = datetime.now()
+        ahora = datetime.now(TZ_MEXICO).replace(tzinfo=None)
         delta = obj.expires_at - ahora
         return max(0, int(delta.total_seconds()))
     
     def verificar_expirado(self, obj):
-        """Verifica si ya expiró por tiempo"""
-        return datetime.now() > obj.expires_at
+        """Verifica si ya expiró por tiempo (usando zona de México)"""
+        ahora = datetime.now(TZ_MEXICO).replace(tzinfo=None)
+        return ahora > obj.expires_at
 
 
 # ============================

@@ -8,8 +8,12 @@ from src.dao.operaciones.reserva_dao import ReservaDAO
 from src.dao.operaciones.hold_mesa_dao import HoldMesaDAO
 from src.dao.catalogos.mesa_dao import MesaDAO
 import logging
+import pytz
 
 logger = logging.getLogger(__name__)
+
+# Zona horaria de México
+TZ_MEXICO = pytz.timezone('America/Mexico_City')
 
 
 class ReservaService:
@@ -60,8 +64,9 @@ class ReservaService:
                 if hold['estatus'] != 1:
                     return {"success": False, "error": f"Hold {hold_id} no está activo (estatus={hold['estatus']})"}
                 
-                # Verificar que no expiró
-                if datetime.now() > hold['expires_at']:
+                # Verificar que no expiró (usar zona de México)
+                ahora_mexico = datetime.now(TZ_MEXICO).replace(tzinfo=None)
+                if ahora_mexico > hold['expires_at']:
                     return {"success": False, "error": f"Hold {hold_id} ya expiró"}
                 
                 # Usar datos del hold

@@ -16,7 +16,7 @@ Actor_tipo:
 from sqlalchemy import Column, BigInteger, Integer, SmallInteger, DateTime, String
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
-from src.models.base import BaseModel
+from src.models.base import BaseModel, get_mexico_now
 
 
 class HoldMesa(BaseModel):
@@ -33,8 +33,9 @@ class HoldMesa(BaseModel):
     expires_at = Column(DateTime, nullable=False)  # TTL: cuándo expira este hold
     estatus = Column(SmallInteger, nullable=False, default=1)  # 1=Activo, 2=Confirmado, 3=Expirado, 4=Cancelado
     notas = Column(String(300), nullable=True)
-    created_at = Column(DateTime, nullable=False, default=func.getdate())
-    updated_at = Column(DateTime, nullable=True, onupdate=func.getdate())
+    created_at = Column(DateTime, nullable=False, default=get_mexico_now)
+    updated_at = Column(DateTime, nullable=True, onupdate=get_mexico_now)
+    horas = Column(Integer, nullable=False)
     
     def __repr__(self):
         return f"<HoldMesa id={self.id_hold_mesa} mesa={self.mesa_id} estatus={self.estatus} expires={self.expires_at}>"

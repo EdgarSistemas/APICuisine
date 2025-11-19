@@ -66,12 +66,23 @@ def create_app():
   init_swagger(app)
 
   # Iniciar jobs programados (APScheduler) en bloque seguro
+  from src.core.scheduler import get_scheduler_status
   try:
       init_scheduler()
+      scheduler_status = get_scheduler_status()
+      if not scheduler_status['running']:
+          import logging
+          logging.getLogger(__name__).critical(
+              "⚠️  ADVERTENCIA: El scheduler no está corriendo. "
+              "Los holds NO se expirarán automáticamente."
+          )
   except Exception as e:
-      # No queremos que un fallo en el scheduler impida que la app arranque
       import logging
-      logging.getLogger(__name__).exception("No se pudo iniciar el scheduler: %s", e)
+      logging.getLogger(__name__).critical(
+          f"✗ ERROR CRÍTICO al iniciar scheduler: {str(e)}\n"
+          "⚠️  Los holds NO se expirarán automáticamente."
+      )
+      logging.getLogger(__name__).exception(e)
 
   # Registrar blueprints
   app.register_blueprint(auth_bp)
@@ -142,6 +153,75 @@ def create_app():
                 example: "API funcionando"
       """
       return {"status": "OK", "message": "API funcionando"}, 200
+
+  @app.route('/health/scheduler')
+  def health_scheduler():
+      """
+      Estado del scheduler automático
+      ---
+      tags:
+        - Sistema
+      summary: Health check del scheduler
+      description: Verifica el estado del scheduler de jobs automáticos (expiración de holds, etc)
+      responses:
+        200:
+          description: Scheduler funcionando correctamente
+          schema:
+            type: object
+            properties:
+              status:
+                type: string
+                example: "OK"
+              scheduler:
+                type: object
+                properties:
+                  initialized:
+                    type: boolean
+                    example: true
+                  running:
+                    type: boolean
+                    example: true
+                  last_check:
+                    type: string
+                    format: date-time
+                    example: "2025-11-17T10:30:45.123456"
+                  error:
+                    type: string
+                    nullable: true
+        503:
+          description: Scheduler no está funcionando correctamente
+          schema:
+            type: object
+            properties:
+              status:
+                type: string
+                example: "ERROR"
+              scheduler:
+                type: object
+      """
+      from src.core.scheduler import get_scheduler_status
+      status = get_scheduler_status()
+      
+      if status['running']:
+          return {
+              "status": "OK",
+              "scheduler": {
+                  "initialized": status['initialized'],
+                  "running": status['running'],
+                  "last_check": status['last_check'].isoformat() if status['last_check'] else None,
+                  "error": status['error']
+              }
+          }, 200
+      else:
+          return {
+              "status": "ERROR",
+              "scheduler": {
+                  "initialized": status['initialized'],
+                  "running": status['running'],
+                  "last_check": status['last_check'].isoformat() if status['last_check'] else None,
+                  "error": status['error']
+              }
+          }, 503
 
   @app.route('/test-simple')
   def test_simple():

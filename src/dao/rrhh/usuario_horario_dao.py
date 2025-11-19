@@ -79,3 +79,96 @@ class UsuarioHorarioDAO:
             ).update({"es_activo": False})
             session.commit()
             return result > 0
+    
+    
+    @staticmethod
+    def resetear_horarios_semana_pasada() -> dict:
+        """
+        Resetea los horarios que terminaron la semana pasada (lunes a las 00:01 México).
+        
+        LÓGICA:
+        1. Obtiene la fecha actual en zona México
+        2. Calcula el inicio de semana pasada (lunes)
+        3. Busca UsuarioHorario donde:
+           - es_activo = True
+           - fecha_fin <= último_domingo_semana_pasada
+        4. Cambia es_activo a False para esos registros
+        
+        Returns:
+            {
+                "success": True/False,
+                "cantidad_reiniciados": int,
+                "mensaje": str,
+                "ids_reiniciados": [...]
+            }
+        """
+        from datetime import datetime, timedelta
+        import pytz
+        
+        TZ_MEXICO = pytz.timezone('America/Mexico_City')
+        
+        try:
+            with get_db_session() as session:
+                # Obtener fecha actual en México
+                ahora_mexico = datetime.now(TZ_MEXICO)
+                fecha_actual = ahora_mexico.date()
+                
+                # Calcular el último domingo (fin de semana pasada)
+                # Si hoy es lunes, el domingo pasado fue ayer
+                dias_desde_lunes = fecha_actual.weekday()  # 0=Lunes, 6=Domingo
+                fecha_ultimo_domingo = fecha_actual - timedelta(days=dias_desde_lunes + 1)
+                
+                print(f"\n[RESET HORARIOS] Ejecutado en México: {ahora_mexico}")
+                print(f"[RESET HORARIOS] Fecha actual: {fecha_actual}")
+                print(f"[RESET HORARIOS] Último domingo (fin de semana pasada): {fecha_ultimo_domingo}")
+                
+                # Buscar asignaciones donde fecha_fin <= último_domingo Y están activas
+                asignaciones_a_resetear = session.query(UsuarioHorario).filter(
+                    UsuarioHorario.es_activo == True,
+                    UsuarioHorario.fecha_fin <= fecha_ultimo_domingo
+                ).all()
+                
+                ids_reiniciados = [a.id_usuario_horario for a in asignaciones_a_resetear]
+                
+                print(f"[RESET HORARIOS] Horarios a resetear: {len(asignaciones_a_resetear)}")
+                for a in asignaciones_a_resetear:
+                    print(f"  - ID={a.id_usuario_horario}, Usuario={a.usuario_id}, Fin={a.fecha_fin}")
+                
+                # Cambiar es_activo a False
+                if ids_reiniciados:
+                    cantidad = session.query(UsuarioHorario).filter(
+                        UsuarioHorario.id_usuario_horario.in_(ids_reiniciados)
+                    ).update({"es_activo": False}, synchronize_session=False)
+                    session.commit()
+                    
+                    print(f"[RESET HORARIOS] ✓ {cantidad} horarios reiniciados")
+                    logger.info(f"[RESET HORARIOS] Se reiniciaron {cantidad} asignaciones de horario")
+                    
+                    return {
+                        "success": True,
+                        "cantidad_reiniciados": cantidad,
+                        "ids_reiniciados": ids_reiniciados,
+                        "mensaje": f"Se han desactivado {cantidad} asignaciones de horario que terminaron semana pasada",
+                        "timestamp": ahora_mexico.isoformat(),
+                        "fecha_corte": str(fecha_ultimo_domingo)
+                    }
+                else:
+                    print(f"[RESET HORARIOS] No hay horarios para resetear")
+                    return {
+                        "success": True,
+                        "cantidad_reiniciados": 0,
+                        "ids_reiniciados": [],
+                        "mensaje": "No hay asignaciones de horario para resetear",
+                        "timestamp": ahora_mexico.isoformat(),
+                        "fecha_corte": str(fecha_ultimo_domingo)
+                    }
+                
+        except Exception as e:
+            logger.error(f"[RESET HORARIOS] Error: {str(e)}", exc_info=True)
+            print(f"[RESET HORARIOS] ✗ Error: {str(e)}")
+            return {
+                "success": False,
+                "cantidad_reiniciados": 0,
+                "error": str(e),
+                "mensaje": f"Error al resetear horarios: {str(e)}"
+            }

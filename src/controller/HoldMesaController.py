@@ -26,36 +26,83 @@ def crear_hold():
       - Holds
     summary: Crear hold de mesa
     description: Crea un hold temporal de 3 minutos para reservar una mesa.
-    requestBody:
-      required: true
-      content:
-        application/json:
-          schema:
+    security:
+      - Bearer: []
+    parameters:
+      - in: body
+        name: body
+        required: true
+        schema:
             type: object
-            required:
-              - mesa_id
             properties:
               mesa_id:
                 type: integer
+                description: ID de la mesa a bloquear (requerido)
               actor_tipo:
                 type: integer
-                description: 1=Cliente, 2=Recepcionista
+                description: Tipo de actor que crea el hold - 1=Cliente, 2=Recepcionista
+              horas:
+                type: integer
+                description: Numero de horas a apartar la mesa
               inicio:
                 type: string
-                format: date-time
-              fin_estimado:
-                type: string
-                format: date-time
+                format: 'yyyy-mm-dd hh:mm:ss'
+                pattern: '^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$'
+                description: Fecha y hora estimada de fin del hold (formato yyyy-mm-dd hh:mm:ss)
+                example: "2025-11-18 00:16:58"
               ttl_minutes:
                 type: integer
                 default: 3
+                description: Minutos que durará el hold antes de expirar automáticamente (por defecto 3)
+              notas:
+                type: string
+                description: Notas o comentarios adicionales sobre el hold (opcional)
     responses:
       201:
-        description: Hold creado
+        description: Hold creado exitosamente
+        schema:
+          type: object
+          properties:
+            message:
+              type: string
+              example: "Hold creado exitosamente"
+            hold:
+              type: object
+              properties:
+                id_hold_mesa:
+                  type: integer
+                  description: ID único del hold creado
+                mesa_id:
+                  type: integer
+                  description: ID de la mesa
+                estatus:
+                  type: integer
+                  description: "1=Activo, 2=Cancelado, 3=Expirado"
+                actor_usuario_id:
+                  type: integer
+                  description: ID del usuario que creó el hold
+                inicio:
+                  type: string
+                  format: date-time
+                fin_estimado:
+                  type: string
+                  format: date-time
+                fechahora_expiracion:
+                  type: string
+                  format: date-time
+                  description: Fecha exacta en que expirará el hold
       400:
-        description: Validación fallida
+        description: Validación fallida o datos inválidos
+        schema:
+          type: object
+          properties:
+            error:
+              type: string
+            detalles:
+              type: object
+              description: Detalles de errores de validación
       409:
-        description: Mesa no disponible
+        description: Mesa no disponible en ese período
     """
     try:
         # Validar schema
@@ -64,16 +111,15 @@ def crear_hold():
         
         # Usuario autenticado
         current_user = get_jwt_identity()
-        usuario_id = current_user.get('id_usuario')
         
         # Crear hold
         result = HoldMesaService.crear_hold(
-            usuario_id=usuario_id,
+            usuario_id=current_user,
             mesa_id=data['mesa_id'],
             actor_tipo=data['actor_tipo'],
             inicio=data['inicio'],
-            fin_estimado=data['fin_estimado'],
-            ttl_minutes=data.get('ttl_minutes', 5),
+            horas=data['horas'],
+            ttl_minutes=data.get('ttl_minutes', 3),
             notas=data.get('notas')
         )
         
@@ -255,14 +301,31 @@ def cancelar_hold(hold_id):
           properties:
             message:
               type: string
+              example: "Hold cancelado exitosamente"
             hold:
               type: object
               properties:
                 id_hold_mesa:
                   type: integer
+                  description: ID del hold cancelado
+                mesa_id:
+                  type: integer
+                  description: ID de la mesa
                 estatus:
                   type: integer
-                  description: "Será 2 (Cancelado)"
+                  description: "2=Cancelado"
+                actor_usuario_id:
+                  type: integer
+                  description: ID del usuario que creó el hold
+                inicio:
+                  type: string
+                  format: date-time
+                fin_estimado:
+                  type: string
+                  format: date-time
+                fechahora_expiracion:
+                  type: string
+                  format: date-time
       403:
         description: Sin permisos para cancelar este hold
       404:
@@ -303,6 +366,124 @@ def cancelar_hold(hold_id):
         return jsonify({"error": "Datos inválidos", "detalles": e.messages}), 400
     except Exception as e:
         logger.error(f"Error en cancelar_hold: {str(e)}")
+        return jsonify({"error": f"Error interno: {str(e)}"}), 500
+
+
+@hold_mesa_bp.route('/<int:hold_id>/confirmar', methods=['POST'])
+@jwt_required()
+def confirmar_hold_endpoint(hold_id):
+    """
+    Confirmar hold y validar TTL
+    ---
+    tags:
+      - Holds
+    summary: Confirmar hold (cambiar a completo)
+    description: |
+      Confirma un hold (cambiar estatus de 1→2 "Completo").
+      
+      VALIDACIONES:
+      1. Hold existe
+      2. Hold está activo (estatus=1)
+      3. Hold no ha expirado (expires_at > now)
+      4. Hay tiempo restante en el TTL
+      
+      Una vez confirmado (estatus=2), el job de expiración lo IGNORA.
+      El hold está "seguro" y listo para crear reserva.
+    parameters:
+      - in: path
+        name: hold_id
+        type: integer
+        required: true
+        description: ID del hold a confirmar
+    responses:
+      200:
+        description: Hold confirmado exitosamente
+        schema:
+          type: object
+          properties:
+            message:
+              type: string
+            hold:
+              type: object
+              description: Hold actualizado con estatus=2
+            tiempo_restante_min:
+              type: number
+              format: float
+              description: Minutos restantes del TTL
+      404:
+        description: Hold no existe
+      410:
+        description: Hold expirado o no activo (no se puede confirmar)
+      500:
+        description: Error interno
+    """
+    try:
+        from src.dao.operaciones.hold_mesa_dao import HoldMesaDAO
+        from src.core.db.session_manager import get_db_session
+        import pytz
+        
+        TZ_MEXICO = pytz.timezone('America/Mexico_City')
+        
+        # Obtener hold
+        hold = HoldMesaDAO.obtener_hold_por_id(hold_id)
+        if not hold:
+            print(f"[CONFIRMAR_HOLD] ✗ Hold {hold_id} no existe")
+            return jsonify({"error": f"Hold {hold_id} no existe"}), 404
+        
+        # Validación 1: Hold debe estar activo (estatus=1)
+        if hold['estatus'] != 1:
+            print(f"[CONFIRMAR_HOLD] ✗ Hold {hold_id} no está activo (estatus={hold['estatus']})")
+            return jsonify({
+                "error": f"Hold no está activo (estatus={hold['estatus']})"
+            }), 410
+        
+        # Validación 2: Hold no debe estar expirado
+        ahora = datetime.now(TZ_MEXICO).replace(tzinfo=None)
+        holds_expires_at = hold['expires_at']
+        
+        # Si expires_at tiene timezone, remover
+        if holds_expires_at.tzinfo is not None:
+            holds_expires_at = holds_expires_at.replace(tzinfo=None)
+        
+        if holds_expires_at <= ahora:
+            tiempo_pasado = (ahora - holds_expires_at).total_seconds() / 60
+            print(f"[CONFIRMAR_HOLD] ✗ Hold {hold_id} expirado hace {tiempo_pasado:.1f}min")
+            return jsonify({
+                "error": f"Hold expirado hace {tiempo_pasado:.1f} minutos"
+            }), 410
+        
+        # Validación 3: Calcular tiempo restante
+        tiempo_restante = (holds_expires_at - ahora).total_seconds() / 60
+        
+        if tiempo_restante < 0:
+            print(f"[CONFIRMAR_HOLD] ✗ Hold {hold_id} expirado (tiempo negativo)")
+            return jsonify({
+                "error": f"Hold expirado hace {abs(tiempo_restante):.1f} minutos"
+            }), 410
+        
+        # ✅ CONFIRMAR: cambiar estatus a 2 (Completo)
+        success = HoldMesaDAO.cambiar_estatus(hold_id, estatus=2)
+        
+        if not success:
+            print(f"[CONFIRMAR_HOLD] ✗ Error al cambiar estatus de hold {hold_id}")
+            return jsonify({
+                "error": f"Error al confirmar hold {hold_id}"
+            }), 500
+        
+        # Obtener hold actualizado
+        hold_confirmado = HoldMesaDAO.obtener_hold_por_id(hold_id)
+        
+        print(f"[CONFIRMAR_HOLD] ✓ Hold {hold_id} confirmado (estatus 1→2), TTL={tiempo_restante:.1f}min restantes")
+        logger.info(f"Hold {hold_id} confirmado con {tiempo_restante:.1f}min restantes")
+        
+        return jsonify({
+            "message": "Hold confirmado. Ahora puedes crear la reserva.",
+            "hold": hold_confirmado,
+            "tiempo_restante_min": round(tiempo_restante, 2)
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error en confirmar_hold: {str(e)}", exc_info=True)
         return jsonify({"error": f"Error interno: {str(e)}"}), 500
 
 
@@ -391,4 +572,53 @@ def verificar_disponibilidad():
         return jsonify({"error": f"Formato de fecha inválido: {str(e)}"}), 400
     except Exception as e:
         logger.error(f"Error en verificar_disponibilidad: {str(e)}")
+        return jsonify({"error": f"Error interno: {str(e)}"}), 500
+
+
+@hold_mesa_bp.route('/admin/limpiar-expirados', methods=['POST'])
+@jwt_required()
+def limpiar_holds_expirados():
+    """
+    [ADMIN] Limpiar holds expirados manualmente
+    ---
+    tags:
+      - Holds
+      - Admin
+    summary: Limpiar holds expirados (manual)
+    description: Ejecuta manualmente la expiración de holds. Útil para debugging, testing y limpieza manual sin esperar al scheduler. Solo disponible para admin/recepcionista.
+    security:
+      - Bearer: []
+    responses:
+      200:
+        description: Limpieza completada
+        schema:
+          type: object
+          properties:
+            success:
+              type: boolean
+              example: true
+            message:
+              type: string
+              example: "Se expiraron 3 holds"
+            cantidad_expirados:
+              type: integer
+              example: 3
+      500:
+        description: Error interno
+    """
+    try:
+        # TODO: Verificar que usuario sea admin/recepcionista
+        current_user = get_jwt_identity()
+        usuario_id = current_user.get('id_usuario')
+        
+        result = HoldMesaService.limpiar_holds_expirados_manual()
+        
+        if result['success']:
+            logger.info(f"[ADMIN] Usuario {usuario_id} ejecutó limpieza manual de holds: {result['cantidad_expirados']} expirados")
+            return jsonify(result), 200
+        else:
+            return jsonify(result), 500
+            
+    except Exception as e:
+        logger.error(f"Error en limpiar_holds_expirados: {str(e)}")
         return jsonify({"error": f"Error interno: {str(e)}"}), 500
