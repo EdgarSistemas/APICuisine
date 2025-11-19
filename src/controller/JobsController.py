@@ -146,12 +146,7 @@ def verificar_no_shows():
         "mensaje": "Error al ejecutar job: ..."
     }
     """
-    try:
-        # Validar usuario
-        current_user = get_jwt_identity()
-        usuario_id = current_user.get('id_usuario') if isinstance(current_user, dict) else None
-        rol = current_user.get('rol') if isinstance(current_user, dict) else None
-        
+    try:       
         logger.info(f"[ENDPOINT VERIFICAR NO-SHOWS] Disparado por Azure Function")
         print(f"\n[ENDPOINT VERIFICAR NO-SHOWS] Iniciado")
         
