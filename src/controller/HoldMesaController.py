@@ -6,6 +6,7 @@ from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from marshmallow import ValidationError
 from src.services.operaciones.hold_mesa_service import HoldMesaService
+from src.dao.operaciones.hold_mesa_dao import HoldMesaDAO
 from src.schemas.reserva_schema import HoldMesaCreateSchema, HoldMesaCancelarSchema
 from datetime import datetime
 import logging
@@ -283,16 +284,15 @@ def cancelar_hold(hold_id):
         type: integer
         required: true
         description: ID del hold a cancelar
-    requestBody:
-      required: false
-      content:
-        application/json:
-          schema:
-            type: object
-            properties:
-              motivo:
-                type: string
-                description: Razón de la cancelación (opcional)
+      - in: body
+        name: body
+        required: false
+        schema:
+          type: object
+          properties:
+            motivo:
+              type: string
+              description: Razón de la cancelación (opcional)
     responses:
       200:
         description: Hold cancelado exitosamente
@@ -336,16 +336,18 @@ def cancelar_hold(hold_id):
         description: Error interno
     """
     try:
+        # Obtener body - request.get_json() maneja mejor el Content-Type
+        data = request.get_json(force=True, silent=True) or {}
+        
         # Validar schema (motivo opcional)
         schema = HoldMesaCancelarSchema()
-        data = schema.load(request.json or {})
+        data = schema.load(data)
         
         # Usuario autenticado
         current_user = get_jwt_identity()
-        usuario_id = current_user.get('id_usuario')
         
-        # Cancelar
-        result = HoldMesaService.cancelar_hold(usuario_id, hold_id)
+        # Cancelar a través del service
+        result = HoldMesaService.cancelar_hold(current_user, hold_id)
         
         if not result['success']:
             # Determinar código según error
@@ -365,7 +367,7 @@ def cancelar_hold(hold_id):
         logger.error(f"Error de validación en cancelar_hold: {e.messages}")
         return jsonify({"error": "Datos inválidos", "detalles": e.messages}), 400
     except Exception as e:
-        logger.error(f"Error en cancelar_hold: {str(e)}")
+        logger.error(f"Error en cancelar_hold: {str(e)}", exc_info=True)
         return jsonify({"error": f"Error interno: {str(e)}"}), 500
 
 
@@ -418,8 +420,6 @@ def confirmar_hold_endpoint(hold_id):
         description: Error interno
     """
     try:
-        from src.dao.operaciones.hold_mesa_dao import HoldMesaDAO
-        from src.core.db.session_manager import get_db_session
         import pytz
         
         TZ_MEXICO = pytz.timezone('America/Mexico_City')
@@ -439,12 +439,27 @@ def confirmar_hold_endpoint(hold_id):
         
         # Validación 2: Hold no debe estar expirado
         ahora = datetime.now(TZ_MEXICO).replace(tzinfo=None)
-        holds_expires_at = hold['expires_at']
         
-        # Si expires_at tiene timezone, remover
-        if holds_expires_at.tzinfo is not None:
+        # holds_expires_at viene del DAO como datetime, puede tener tzinfo
+        holds_expires_at = hold.get('expires_at')
+        if holds_expires_at is None:
+            print(f"[CONFIRMAR_HOLD] ✗ Hold {hold_id} no tiene expires_at")
+            return jsonify({
+                "error": "Hold no tiene fecha de expiración configurada"
+            }), 410
+        
+        # Asegurar que expires_at es datetime sin timezone
+        if isinstance(holds_expires_at, str):
+            try:
+                holds_expires_at = datetime.fromisoformat(holds_expires_at.replace('Z', '+00:00'))
+            except (ValueError, AttributeError):
+                holds_expires_at = datetime.fromisoformat(holds_expires_at)
+        
+        # Remover timezone si existe
+        if hasattr(holds_expires_at, 'tzinfo') and holds_expires_at.tzinfo is not None:
             holds_expires_at = holds_expires_at.replace(tzinfo=None)
         
+        # Comparar
         if holds_expires_at <= ahora:
             tiempo_pasado = (ahora - holds_expires_at).total_seconds() / 60
             print(f"[CONFIRMAR_HOLD] ✗ Hold {hold_id} expirado hace {tiempo_pasado:.1f}min")
@@ -461,7 +476,7 @@ def confirmar_hold_endpoint(hold_id):
                 "error": f"Hold expirado hace {abs(tiempo_restante):.1f} minutos"
             }), 410
         
-        # ✅ CONFIRMAR: cambiar estatus a 2 (Completo)
+        # CONFIRMAR: cambiar estatus a 2 (Completo)
         success = HoldMesaDAO.cambiar_estatus(hold_id, estatus=2)
         
         if not success:
@@ -496,29 +511,32 @@ def verificar_disponibilidad():
     tags:
       - Holds
     summary: Verificar disponibilidad de mesa
-    description: Verifica si una mesa está disponible para reservar en un rango de fechas específico. Útil para mostrar disponibilidad antes de crear hold. Excluye holds y reservas activas en ese período.
-    requestBody:
-      required: true
-      content:
-        application/json:
-          schema:
-            type: object
-            required:
-              - mesa_id
-              - inicio
-              - fin_estimado
-            properties:
-              mesa_id:
-                type: integer
-                description: ID de la mesa
-              inicio:
-                type: string
-                format: date-time
-                example: "2025-11-15T19:00:00"
-              fin_estimado:
-                type: string
-                format: date-time
-                example: "2025-11-15T21:00:00"
+    description: Verifica si una mesa está disponible para reservar en un rango de fechas específico.
+    parameters:
+      - in: body
+        name: body
+        required: true
+        schema:
+          type: object
+          required:
+            - mesa_id
+            - inicio
+            - fin_estimado
+          properties:
+            mesa_id:
+              type: integer
+              description: ID de la mesa
+              example: 1
+            inicio:
+              type: string
+              format: date-time
+              description: Fecha/hora inicio (ISO format)
+              example: "2025-11-18T19:00:00"
+            fin_estimado:
+              type: string
+              format: date-time
+              description: Fecha/hora fin estimado (ISO format)
+              example: "2025-11-18T21:00:00"
     responses:
       200:
         description: Verificación completada
@@ -527,22 +545,18 @@ def verificar_disponibilidad():
           properties:
             disponible:
               type: boolean
-              description: "true si la mesa está disponible en ese período"
             mensaje:
               type: string
-              description: "Descripción del resultado (disponible o razón por la que no)"
       400:
-        description: Datos inválidos o mesa no existe
-        schema:
-          type: object
-          properties:
-            error:
-              type: string
-              description: Mensaje de error (ej, "Mesa 5 no existe", "Formato de fecha inválido")
+        description: Datos inválidos
       500:
         description: Error interno
     """
     try:
+        # Validar que request.json no sea None
+        if not request.json:
+            return jsonify({"error": "Body JSON es requerido"}), 400
+        
         data = request.json
         
         # Validar campos requeridos
@@ -550,10 +564,13 @@ def verificar_disponibilidad():
             return jsonify({"error": "Faltan campos requeridos: mesa_id, inicio, fin_estimado"}), 400
         
         # Parsear fechas
-        inicio = datetime.fromisoformat(data['inicio'].replace('Z', '+00:00'))
-        fin_estimado = datetime.fromisoformat(data['fin_estimado'].replace('Z', '+00:00'))
+        try:
+            inicio = datetime.fromisoformat(data['inicio'].replace('Z', '+00:00'))
+            fin_estimado = datetime.fromisoformat(data['fin_estimado'].replace('Z', '+00:00'))
+        except (ValueError, AttributeError) as e:
+            return jsonify({"error": f"Formato de fecha inválido: {str(e)}"}), 400
         
-        # Verificar
+        # Verificar disponibilidad a través del service
         result = HoldMesaService.verificar_disponibilidad_mesa(
             data['mesa_id'],
             inicio,
@@ -569,9 +586,10 @@ def verificar_disponibilidad():
         }), 200
         
     except ValueError as e:
+        logger.error(f"Error de validación en verificar_disponibilidad: {str(e)}")
         return jsonify({"error": f"Formato de fecha inválido: {str(e)}"}), 400
     except Exception as e:
-        logger.error(f"Error en verificar_disponibilidad: {str(e)}")
+        logger.error(f"Error en verificar_disponibilidad: {str(e)}", exc_info=True)
         return jsonify({"error": f"Error interno: {str(e)}"}), 500
 
 

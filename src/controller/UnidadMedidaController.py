@@ -127,10 +127,6 @@ def crear_unidad():
             nombre:
               type: string
               example: "Kilogramo"
-            simbolo:
-              type: string
-              example: "kg"
-              required: false
     responses:
       201:
         description: Unidad creada
@@ -158,7 +154,6 @@ def crear_unidad():
             usuario_id=usuario_id,
             clave=datos_validados['clave'],
             nombre=datos_validados['nombre'],
-            simbolo=datos_validados.get('simbolo')
         )
         
         if resultado['success']:
@@ -205,8 +200,6 @@ def actualizar_unidad(unidad_id):
               type: string
             nombre:
               type: string
-            simbolo:
-              type: string
     responses:
       200:
         description: Unidad actualizada
@@ -234,8 +227,7 @@ def actualizar_unidad(unidad_id):
             usuario_id=usuario_id,
             unidad_id=unidad_id,
             clave=datos_validados.get('clave'),
-            nombre=datos_validados.get('nombre'),
-            simbolo=datos_validados.get('simbolo')
+            nombre=datos_validados.get('nombre')
         )
         
         if resultado['success']:

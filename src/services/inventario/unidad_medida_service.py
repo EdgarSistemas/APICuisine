@@ -13,7 +13,7 @@ class UnidadMedidaService:
     """Business logic para UnidadMedida"""
     
     @staticmethod
-    def crear_unidad_medida(usuario_id: int, clave: str, nombre: str, simbolo: str = None) -> dict:
+    def crear_unidad_medida(usuario_id: int, clave: str, nombre: str) -> dict:
         """
         Crear nueva unidad de medida.
         Solo ADMIN puede crear.
@@ -39,7 +39,7 @@ class UnidadMedidaService:
                 return {"success": False, "error": f"La clave '{clave}' ya existe"}
             
             # CREAR
-            unidad = UnidadMedidaDAO.crear_unidad_medida(clave, nombre, simbolo)
+            unidad = UnidadMedidaDAO.crear_unidad_medida(clave, nombre)
             
             logger.info(f"Admin {usuario_id} creó unidad de medida: {clave}")
             return {
@@ -122,7 +122,7 @@ class UnidadMedidaService:
                 return {"success": False, "error": f"Unidad de medida {unidad_id} no existe"}
             
             # ACTUALIZAR
-            unidad = UnidadMedidaDAO.actualizar_unidad(unidad_id, clave, nombre, simbolo)
+            unidad = UnidadMedidaDAO.actualizar_unidad(unidad_id, clave, nombre)
             
             logger.info(f"Admin {usuario_id} actualizó unidad de medida: {unidad_id}")
             return {

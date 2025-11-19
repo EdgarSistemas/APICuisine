@@ -14,7 +14,7 @@ class UnidadMedidaDAO:
     """Data Access Object para UnidadMedida"""
     
     @staticmethod
-    def crear_unidad_medida(clave: str, nombre: str, simbolo: str = None) -> dict:
+    def crear_unidad_medida(clave: str, nombre: str) -> dict:
         """
         Crear una nueva unidad de medida.
         
@@ -28,7 +28,7 @@ class UnidadMedidaDAO:
         """
         schema = UnidadMedidaResponseSchema()
         with get_db_session() as session:
-            unidad = UnidadMedida(clave=clave, nombre=nombre, simbolo=simbolo)
+            unidad = UnidadMedida(clave=clave, nombre=nombre)
             session.add(unidad)
             session.commit()
             logger.info(f"Unidad de medida creada: {clave} - {nombre}")
@@ -88,8 +88,7 @@ class UnidadMedidaDAO:
     
     
     @staticmethod
-    def actualizar_unidad(unidad_id: int, clave: str = None, nombre: str = None, 
-                         simbolo: str = None) -> dict:
+    def actualizar_unidad(unidad_id: int, clave: str = None, nombre: str = None) -> dict:
         """
         Actualizar unidad de medida.
         
@@ -97,7 +96,6 @@ class UnidadMedidaDAO:
             unidad_id: ID de la unidad
             clave: Nueva clave (opcional)
             nombre: Nuevo nombre (opcional)
-            simbolo: Nuevo símbolo (opcional)
             
         Returns:
             Dict actualizado o None
@@ -115,8 +113,6 @@ class UnidadMedidaDAO:
                 unidad.clave = clave
             if nombre:
                 unidad.nombre = nombre
-            if simbolo is not None:
-                unidad.simbolo = simbolo
             
             session.commit()
             logger.info(f"Unidad de medida actualizada: {unidad_id}")
