@@ -9,8 +9,12 @@ from src.models.operaciones.reserva_model import Reserva
 from src.core.db.session_manager import get_db_session
 from src.schemas.reserva_schema import ReservaResponseSchema
 import logging
+import pytz
 
 logger = logging.getLogger(__name__)
+
+# Zona horaria de México
+TZ_MEXICO = pytz.timezone('America/Mexico_City')
 
 
 class ReservaDAO:
@@ -80,6 +84,7 @@ class ReservaDAO:
     
     @staticmethod
     def listar_reservas(
+        sucursal_id: int = None,
         cliente_id: int = None,
         estatus: int = None,
         fecha_desde: datetime = None,
@@ -88,11 +93,16 @@ class ReservaDAO:
         """
         Listar reservas con filtros opcionales.
         
+        Filtros sobre fechas:
+        - fecha_desde: reservas donde inicio >= fecha_desde
+        - fecha_hasta: reservas donde fin_estimado <= fecha_hasta
+        
         Args:
+            sucursal_id: Filtrar por sucursal
             cliente_id: Filtrar por cliente
             estatus: Filtrar por estatus
-            fecha_desde: Filtrar desde fecha
-            fecha_hasta: Filtrar hasta fecha
+            fecha_desde: Filtrar desde fecha (aplica a 'inicio')
+            fecha_hasta: Filtrar hasta fecha (aplica a 'fin_estimado')
             
         Returns:
             Lista de dicts de reservas
@@ -101,17 +111,21 @@ class ReservaDAO:
         with get_db_session() as session:
             query = session.query(Reserva)
             
+            if sucursal_id:
+                query = query.filter(Reserva.sucursal_id == sucursal_id)
+            
             if cliente_id:
                 query = query.filter(Reserva.cliente_id == cliente_id)
             
             if estatus:
                 query = query.filter(Reserva.estatus == estatus)
             
+            # Filtrar por rango de fechas usando inicio y fin_estimado
             if fecha_desde:
                 query = query.filter(Reserva.inicio >= fecha_desde)
             
             if fecha_hasta:
-                query = query.filter(Reserva.inicio <= fecha_hasta)
+                query = query.filter(Reserva.fin_estimado <= fecha_hasta)
             
             reservas = query.order_by(Reserva.inicio.asc()).all()
             return [schema.dump(r) for r in reservas]
@@ -231,47 +245,6 @@ class ReservaDAO:
     
     
     @staticmethod
-    def verificar_no_shows() -> int:
-        """
-        Job de limpieza: Marcar como NoShow reservas programadas
-        donde se pasó el tiempo de tolerancia.
-        
-        Returns:
-            Cantidad de reservas marcadas como NoShow
-        """
-        with get_db_session() as session:
-            ahora = datetime.now()
-            
-            # Obtener config default de tolerancia (15 min)
-            # TODO: Leer desde config.ConfigSucursal
-            tolerancia_default = 15
-            
-            # Buscar reservas programadas donde ya pasó inicio + tolerancia
-            reservas_programadas = session.query(Reserva).filter(
-                Reserva.estatus == 1  # Solo programadas
-            ).all()
-            
-            count = 0
-            for reserva in reservas_programadas:
-                tolerancia = reserva.tolerancia_min or tolerancia_default
-                # Si pasó inicio + tolerancia
-                from datetime import timedelta
-                limite = reserva.inicio + timedelta(minutes=tolerancia)
-                
-                if ahora > limite:
-                    reserva.estatus = 4  # NoShow
-                    reserva.updated_at = ahora
-                    reserva.notas = (reserva.notas or "") + f" | NoShow automático (tolerancia {tolerancia} min)"
-                    count += 1
-            
-            if count > 0:
-                session.commit()
-                logger.info(f"Job: {count} reservas marcadas como NoShow automáticamente")
-            
-            return count
-    
-    
-    @staticmethod
     def reserva_existe(reserva_id: int) -> bool:
         """
         Verificar si una reserva existe.
@@ -287,3 +260,60 @@ class ReservaDAO:
                 Reserva.id_reserva == reserva_id
             ).first()
             return existe is not None
+    
+    
+    @staticmethod
+    def verificar_no_shows() -> int:
+        """
+        Job: Marca automáticamente como NoShow reservas programadas donde pasó la tolerancia.
+        
+        LÓGICA:
+        - Busca reservas con estatus=1 (Programada)
+        - Verifica si ahora > (inicio + tolerancia_min)
+        - Cambia estatus a 4 (NoShow) automáticamente
+        
+        IMPORTANTE: 
+        - Se ejecuta desde Azure Function Timer (NO desde scheduler local)
+        - NO hay ejecución automática local
+        - Solo consumido por POST /api/jobs/verificar-no-shows
+        - Usa timezone MÉXICO para todas las comparaciones
+        
+        Returns:
+            int: Cantidad de reservas marcadas como NoShow
+        """
+        with get_db_session() as session:
+            from datetime import timedelta
+            ahora_mexico = datetime.now(TZ_MEXICO).replace(tzinfo=None)
+            tolerancia_default = 15
+            
+            # Buscar reservas programadas (estatus=1)
+            reservas_programadas = session.query(Reserva).filter(
+                Reserva.estatus == 1  # Solo programadas
+            ).all()
+            
+            count = 0
+            for reserva in reservas_programadas:
+                tolerancia = reserva.tolerancia_min or tolerancia_default
+                
+                # Convertir inicio a datetime si es string y aplicar timezone
+                inicio_reserva = reserva.inicio
+                if isinstance(inicio_reserva, str):
+                    inicio_reserva = datetime.fromisoformat(inicio_reserva.replace('Z', '+00:00'))
+                    if inicio_reserva.tzinfo:
+                        inicio_reserva = inicio_reserva.astimezone(TZ_MEXICO).replace(tzinfo=None)
+                
+                # Calcular límite de tolerancia con timezone México
+                limite = inicio_reserva + timedelta(minutes=tolerancia)
+                
+                # Si pasó el deadline de tolerancia, marcar como NoShow (comparación con timezone México)
+                if ahora_mexico > limite:
+                    reserva.estatus = 4  # NoShow
+                    reserva.updated_at = ahora_mexico
+                    reserva.notas = (reserva.notas or "") + f" | NoShow automático (por job - tolerancia {tolerancia} min)"
+                    count += 1
+            
+            if count > 0:
+                session.commit()
+                logger.info(f"Job verificar_no_shows: {count} reservas marcadas como NoShow (timezone México)")
+            
+            return count

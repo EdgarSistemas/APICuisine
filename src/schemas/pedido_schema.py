@@ -4,6 +4,7 @@ Schemas para Pedido y PedidoItem - Validación con Marshmallow
 
 from marshmallow import Schema, fields, validates, ValidationError, validates_schema
 from decimal import Decimal
+from src.schemas.helpers import FormattedDateTime
 
 
 # ============================
@@ -113,8 +114,8 @@ class PedidoResponseSchema(Schema):
     estado_pedido = fields.Int()
     notas = fields.Str(allow_none=True)
     items = fields.List(fields.Dict())
-    created_at = fields.DateTime()
-    updated_at = fields.DateTime(allow_none=True)
+    created_at = FormattedDateTime()
+    updated_at = FormattedDateTime(allow_none=True)
     
     # Campos calculados
     estatus_display = fields.Method("get_estatus_display")
@@ -147,8 +148,8 @@ class PedidoItemResponseSchema(Schema):
     precio_unit = fields.Decimal(as_string=False)
     estatus = fields.Int()
     notas = fields.Str(allow_none=True)
-    created_at = fields.DateTime()
-    updated_at = fields.DateTime(allow_none=True)
+    created_at = FormattedDateTime()
+    updated_at = FormattedDateTime(allow_none=True)
     
     # Campos calculados
     subtotal = fields.Method("calcular_subtotal")

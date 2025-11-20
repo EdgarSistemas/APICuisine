@@ -4,6 +4,7 @@ Schemas para Pago - Validación con Marshmallow
 
 from marshmallow import Schema, fields, validates, ValidationError
 from decimal import Decimal
+from src.schemas.helpers import FormattedDateTime
 
 
 class PagoCreateSchema(Schema):
@@ -53,8 +54,8 @@ class PagoResponseSchema(Schema):
     moneda = fields.Str()
     estatus = fields.Int()
     usuario_id = fields.Int(allow_none=True)
-    created_at = fields.DateTime()
-    updated_at = fields.DateTime(allow_none=True)
+    created_at = FormattedDateTime()
+    updated_at = FormattedDateTime(allow_none=True)
     
     # Campos calculados
     total = fields.Method("calcular_total")

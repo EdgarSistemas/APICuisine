@@ -3,6 +3,7 @@ Combo Schema - Validación y serialización
 """
 
 from marshmallow import Schema, fields, validate
+from src.schemas.helpers import FormattedDateTime
 
 
 class ComboCreateSchema(Schema):
@@ -67,8 +68,8 @@ class ComboResponseSchema(Schema):
     imagen_url = fields.Str(allow_none=True)
     precio = fields.Decimal(places=2)
     es_activo = fields.Bool()
-    created_at = fields.DateTime(allow_none=True, format='%Y-%m-%d %H:%M:%S')
-    updated_at = fields.DateTime(allow_none=True, format='%Y-%m-%d %H:%M:%S')
+    created_at = FormattedDateTime(allow_none=True)
+    updated_at = FormattedDateTime(allow_none=True)
 
     class Meta:
         strict = True
@@ -83,8 +84,8 @@ class ComboDetailedSchema(Schema):
     precio = fields.Decimal(places=2)
     productos = fields.List(fields.Nested(ComboProductoDetailSchema))
     es_activo = fields.Bool()
-    created_at = fields.DateTime(allow_none=True, format='%Y-%m-%d %H:%M:%S')
-    updated_at = fields.DateTime(allow_none=True, format='%Y-%m-%d %H:%M:%S')
+    created_at = FormattedDateTime(allow_none=True)
+    updated_at = FormattedDateTime(allow_none=True)
 
     class Meta:
         strict = True
@@ -135,8 +136,8 @@ class ComboProductoResponseSchema(Schema):
     combo_id = fields.Int()
     producto_id = fields.Int()
     cantidad = fields.Int()
-    created_at = fields.DateTime(allow_none=True, format='%Y-%m-%d %H:%M:%S')
-    updated_at = fields.DateTime(allow_none=True, format='%Y-%m-%d %H:%M:%S')
+    created_at = FormattedDateTime(allow_none=True)
+    updated_at = FormattedDateTime(allow_none=True)
 
     class Meta:
         strict = True

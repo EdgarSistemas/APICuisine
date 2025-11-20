@@ -5,6 +5,7 @@ Schemas para HoldMesa y Reserva - Validación con Marshmallow
 from marshmallow import Schema, fields, validates, ValidationError, validates_schema
 from datetime import datetime, timedelta
 import pytz
+from src.schemas.helpers import FormattedDateTime
 
 # Zona horaria de México
 TZ_MEXICO = pytz.timezone('America/Mexico_City')
@@ -60,14 +61,14 @@ class HoldMesaResponseSchema(Schema):
     mesa_id = fields.Int()
     actor_tipo = fields.Int()
     actor_usuario_id = fields.Int(allow_none=True)
-    inicio = fields.DateTime()
+    inicio = FormattedDateTime()
     horas = fields.Int()
-    fin_estimado = fields.DateTime()
-    expires_at = fields.DateTime()
+    fin_estimado = FormattedDateTime()
+    expires_at = FormattedDateTime()
     estatus = fields.Int()
     notas = fields.Str(allow_none=True)
-    created_at = fields.DateTime()
-    updated_at = fields.DateTime(allow_none=True)
+    created_at = FormattedDateTime()
+    updated_at = FormattedDateTime(allow_none=True)
     
     # Campos calculados
     tiempo_restante_segundos = fields.Method("calcular_tiempo_restante")
@@ -142,14 +143,14 @@ class ReservaResponseSchema(Schema):
     id_reserva = fields.Int()
     cliente_id = fields.Int(allow_none=True)
     recepcionista_id = fields.Int(allow_none=True)
-    inicio = fields.DateTime()
-    fin_estimado = fields.DateTime()
+    inicio = FormattedDateTime()
+    fin_estimado = FormattedDateTime()
     estatus = fields.Int()
     tolerancia_min = fields.Int(allow_none=True)
     notas = fields.Str(allow_none=True)
     hold_id = fields.Int(allow_none=True)
-    created_at = fields.DateTime()
-    updated_at = fields.DateTime(allow_none=True)
+    created_at = FormattedDateTime()
+    updated_at = FormattedDateTime(allow_none=True)
     
     # Campos calculados
     estatus_display = fields.Method("get_estatus_display")
@@ -177,7 +178,8 @@ class ReservaResponseSchema(Schema):
 
 class ReservaListarQuerySchema(Schema):
     """Schema para query params al listar reservas"""
+    sucursal_id = fields.Int(required=False, allow_none=True)
     cliente_id = fields.Int(required=False, allow_none=True)
     estatus = fields.Int(required=False, allow_none=True)
-    fecha_desde = fields.DateTime(required=False, allow_none=True)
-    fecha_hasta = fields.DateTime(required=False, allow_none=True)
+    fecha_desde = fields.DateTime(required=False, allow_none=True, format='%Y-%m-%d %H:%M:%S')
+    fecha_hasta = fields.DateTime(required=False, allow_none=True, format='%Y-%m-%d %H:%M:%S')

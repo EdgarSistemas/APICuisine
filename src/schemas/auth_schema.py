@@ -1,4 +1,5 @@
 from marshmallow import Schema, fields, validate, validates_schema, ValidationError
+from src.schemas.helpers import FormattedDateTime
 
 class LoginSchema(Schema):
     """Esquema para validación de login"""
@@ -74,8 +75,8 @@ class RolResponseSchema(Schema):
     nombre = fields.Str()
     descripcion = fields.Str()
     activo = fields.Bool()
-    created_at = fields.DateTime(format='%Y-%m-%d %H:%M:%S')
-    updated_at = fields.DateTime(format='%Y-%m-%d %H:%M:%S')
+    created_at = FormattedDateTime()
+    updated_at = FormattedDateTime()
 
 class UsuarioCreateSchema(Schema):
     """Esquema para creación de usuarios"""
@@ -127,8 +128,8 @@ class UsuarioResponseSchema(Schema):
     es_cliente = fields.Bool()
     acepta_marketing = fields.Bool()
     tipo_acceso = fields.Str()
-    created_at = fields.DateTime(format='%Y-%m-%d %H:%M:%S')
-    updated_at = fields.DateTime(format='%Y-%m-%d %H:%M:%S')
+    created_at = FormattedDateTime()
+    updated_at = FormattedDateTime()
     roles = fields.List(fields.Dict())
     sucursales = fields.List(fields.Dict())
     modulos = fields.List(fields.Dict())
@@ -188,8 +189,8 @@ class ModuloResponseSchema(Schema):
     orden = fields.Int()
     es_activo = fields.Bool()
     requiere_permisos = fields.Bool()
-    created_at = fields.DateTime(format='%Y-%m-%d %H:%M:%S')
-    updated_at = fields.DateTime(format='%Y-%m-%d %H:%M:%S')
+    created_at = FormattedDateTime()
+    updated_at = FormattedDateTime()
 
 class PermisoModuloSchema(Schema):
     """Esquema para permisos de módulo"""

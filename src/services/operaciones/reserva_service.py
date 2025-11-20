@@ -61,12 +61,22 @@ class ReservaService:
                 if not hold:
                     return {"success": False, "error": f"Hold {hold_id} no existe"}
                 
-                if hold['estatus'] != 1:
+                if hold['estatus'] not in (1,2):
                     return {"success": False, "error": f"Hold {hold_id} no está activo (estatus={hold['estatus']})"}
                 
                 # Verificar que no expiró (usar zona de México)
                 ahora_mexico = datetime.now(TZ_MEXICO).replace(tzinfo=None)
-                if ahora_mexico > hold['expires_at']:
+                
+                # Convertir expires_at a datetime si es string
+                expires_at = hold['expires_at']
+                if isinstance(expires_at, str):
+                    expires_at = datetime.fromisoformat(expires_at.replace('Z', '+00:00'))
+                    if expires_at.tzinfo:
+                        expires_at = expires_at.astimezone(TZ_MEXICO).replace(tzinfo=None)
+                elif expires_at.tzinfo:
+                    expires_at = expires_at.replace(tzinfo=None)
+                
+                if ahora_mexico > expires_at:
                     return {"success": False, "error": f"Hold {hold_id} ya expiró"}
                 
                 # Usar datos del hold
@@ -130,6 +140,7 @@ class ReservaService:
     @staticmethod
     def listar_reservas(
         usuario_id: int,
+        sucursal_id: int = None,
         cliente_id: int = None,
         estatus: int = None,
         fecha_desde: datetime = None,
@@ -143,6 +154,7 @@ class ReservaService:
         
         Args:
             usuario_id: ID del usuario autenticado
+            sucursal_id: Filtrar por sucursal
             cliente_id: Filtrar por cliente
             estatus: Filtrar por estatus
             fecha_desde: Desde fecha
@@ -156,6 +168,7 @@ class ReservaService:
             # Por ahora permitimos filtrar libremente
             
             reservas = ReservaDAO.listar_reservas(
+                sucursal_id=sucursal_id,
                 cliente_id=cliente_id,
                 estatus=estatus,
                 fecha_desde=fecha_desde,
@@ -178,7 +191,9 @@ class ReservaService:
         VALIDACIONES:
         1. Reserva existe
         2. Reserva está programada (estatus=1)
-        3. Está dentro del horario permitido (inicio - tolerancia <= ahora)
+        3. Está dentro de la ventana de tolerancia:
+           - ANTES: Se puede iniciar desde (inicio - tolerancia_min)
+           - DESPUÉS: Deadline es (inicio + tolerancia_min), pasado ese tiempo = NoShow automático
         
         Args:
             usuario_id: ID del usuario autenticado
@@ -188,6 +203,8 @@ class ReservaService:
             {success: bool, data?: dict, error?: str}
         """
         try:
+            from datetime import timedelta
+            
             # VALIDACIÓN 1: Reserva existe
             reserva = ReservaDAO.obtener_reserva_por_id(reserva_id)
             if not reserva:
@@ -197,21 +214,35 @@ class ReservaService:
             if reserva['estatus'] != 1:
                 return {"success": False, "error": f"Reserva {reserva_id} no está programada (estatus={reserva['estatus']})"}
             
-            # VALIDACIÓN 3: Está dentro del horario permitido
-            from datetime import timedelta
-            ahora = datetime.now()
+            # VALIDACIÓN 3: Está dentro de la ventana de tolerancia
+            ahora_mexico = datetime.now(TZ_MEXICO).replace(tzinfo=None)
             inicio_reserva = reserva['inicio']
             tolerancia = reserva['tolerancia_min'] or 15
             
-            ventana_inicio = inicio_reserva - timedelta(minutes=tolerancia)
+            # Convertir inicio_reserva a datetime si es string
+            if isinstance(inicio_reserva, str):
+                inicio_reserva = datetime.fromisoformat(inicio_reserva.replace('Z', '+00:00'))
+                if inicio_reserva.tzinfo:
+                    inicio_reserva = inicio_reserva.astimezone(TZ_MEXICO).replace(tzinfo=None)
             
-            if ahora < ventana_inicio:
+            ventana_inicio = inicio_reserva - timedelta(minutes=tolerancia)
+            ventana_fin = inicio_reserva + timedelta(minutes=tolerancia)
+            
+            # Aún no llegó a la ventana de llegada
+            if ahora_mexico < ventana_inicio:
                 return {
                     "success": False,
                     "error": f"Aún no es hora de iniciar. La reserva es a las {inicio_reserva.strftime('%H:%M')}, puedes llegar desde {ventana_inicio.strftime('%H:%M')}"
                 }
             
-            # Iniciar
+            # Pasó la ventana de tolerancia (deadline para presentarse)
+            if ahora_mexico > ventana_fin:
+                return {
+                    "success": False,
+                    "error": f"Ya pasó la ventana de tolerancia. Límite era {ventana_fin.strftime('%H:%M')}. Esta reserva debe marcarse como NoShow."
+                }
+            
+            # Está en ventana válida - iniciar
             reserva_actualizada = ReservaDAO.iniciar_reserva(reserva_id)
             
             logger.info(f"Reserva {reserva_id} iniciada por usuario {usuario_id}")

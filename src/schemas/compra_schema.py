@@ -3,6 +3,7 @@ Compra Schema - Validación y serialización
 """
 
 from marshmallow import Schema, fields, validate
+from src.schemas.helpers import FormattedDateTime
 
 
 class CompraDetalleItemSchema(Schema):
@@ -47,8 +48,8 @@ class CompraDetalleResponseSchema(Schema):
     cant_presentacion = fields.Decimal(places=2)
     presentacion = fields.Str()
     costo_unit_present = fields.Decimal(places=2)
-    created_at = fields.DateTime(allow_none=True, format='%Y-%m-%d %H:%M:%S')
-    updated_at = fields.DateTime(allow_none=True, format='%Y-%m-%d %H:%M:%S')
+    created_at = FormattedDateTime(allow_none=True)
+    updated_at = FormattedDateTime(allow_none=True)
 
     class Meta:
         strict = True
@@ -61,10 +62,10 @@ class CompraResponseSchema(Schema):
     sucursal_id = fields.Int()
     proveedor_id = fields.Int()
     folio = fields.Str()
-    fecha_compra = fields.DateTime(format='%Y-%m-%d %H:%M:%S')
+    fecha_compra = FormattedDateTime()
     estatus = fields.Int()
-    created_at = fields.DateTime(allow_none=True, format='%Y-%m-%d %H:%M:%S')
-    updated_at = fields.DateTime(allow_none=True, format='%Y-%m-%d %H:%M:%S')
+    created_at = FormattedDateTime(allow_none=True)
+    updated_at = FormattedDateTime(allow_none=True)
 
     class Meta:
         strict = True
@@ -77,11 +78,11 @@ class CompraDetailedSchema(Schema):
     sucursal_id = fields.Int()
     proveedor_id = fields.Int()
     folio = fields.Str()
-    fecha_compra = fields.DateTime(format='%Y-%m-%d %H:%M:%S')
+    fecha_compra = FormattedDateTime()
     estatus = fields.Int()
     detalles = fields.List(fields.Nested(CompraDetalleResponseSchema))
-    created_at = fields.DateTime(allow_none=True, format='%Y-%m-%d %H:%M:%S')
-    updated_at = fields.DateTime(allow_none=True, format='%Y-%m-%d %H:%M:%S')
+    created_at = FormattedDateTime(allow_none=True)
+    updated_at = FormattedDateTime(allow_none=True)
 
     class Meta:
         strict = True

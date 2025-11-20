@@ -25,38 +25,154 @@ reserva_bp = Blueprint('reserva', __name__, url_prefix='/api/reservas')
 @jwt_required()
 def crear_reserva():
     """
-    Crear reserva confirmada desde hold.
+    Crear reserva confirmada (preferentemente desde hold).
     ---
     tags:
       - Reservas
-    summary: Crear reserva
-    description: Crea una reserva confirmada. Recomendado desde un hold existente.
-    requestBody:
-      required: true
-      content:
-        application/json:
-          schema:
-            type: object
-            properties:
-              cliente_id:
-                type: integer
-              inicio:
-                type: string
-                format: date-time
-              fin_estimado:
-                type: string
-                format: date-time
-              hold_id:
-                type: integer
+    summary: "Paso 1: Crear Reserva"
+    description: Crea una nueva reserva confirmada. Es recomendable que venga desde un Hold previo confirmado, pero también se puede crear directamente. Si viene de un Hold, se valida que esté activo y no haya expirado. El Hold se marca como confirmado automáticamente.
+    parameters:
+      - in: body
+        name: body
+        required: true
+        schema:
+          type: object
+          required:
+            - inicio
+            - fin_estimado
+          properties:
+            cliente_id:
+              type: integer
+              description: "ID del cliente que hace la reserva (opcional)"
+            recepcionista_id:
+              type: integer
+              description: "ID del recepcionista si es una reserva creada por recepción (opcional)"
+            inicio:
+              type: string
+              format: date-time
+              description: "Fecha y hora de inicio de la reserva (ISO 8601). Ej: 2025-11-18T19:00:00"
+            fin_estimado:
+              type: string
+              format: date-time
+              description: "Fecha y hora estimada de fin (ISO 8601). Ej: 2025-11-18T20:30:00"
+            tolerancia_min:
+              type: integer
+              description: "Minutos de tolerancia antes de marcar como NoShow (default: 15, rango: 0-120)"
+            notas:
+              type: string
+              description: "Notas adicionales sobre la reserva. Ej: 'Mesa cerca de la ventana, cumpleaños' (opcional)"
+            hold_id:
+              type: integer
+              description: "ID del Hold confirmado previamente (opcional pero recomendado). Si se envía, se valida que el Hold esté activo y no haya expirado"
+        example:
+          cliente_id: 1
+          recepcionista_id: 2
+          inicio: "2025-11-18T19:00:00"
+          fin_estimado: "2025-11-18T20:30:00"
+          tolerancia_min: 15
+          notas: "Mesa cerca de la ventana"
+          hold_id: 5
     responses:
       201:
-        description: Reserva creada
+        description: "Reserva creada exitosamente"
+        schema:
+          type: object
+          properties:
+            message:
+              type: string
+              example: "Reserva creada exitosamente"
+            reserva:
+              type: object
+              properties:
+                id_reserva:
+                  type: integer
+                  example: 10
+                cliente_id:
+                  type: integer
+                  example: 1
+                recepcionista_id:
+                  type: integer
+                  example: 2
+                inicio:
+                  type: string
+                  format: date-time
+                  example: "2025-11-18T19:00:00"
+                fin_estimado:
+                  type: string
+                  format: date-time
+                  example: "2025-11-18T20:30:00"
+                estatus:
+                  type: integer
+                  example: 1
+                  description: "1=Programada, 2=EnCurso, 3=Completada, 4=NoShow, 5=Cancelada"
+                tolerancia_min:
+                  type: integer
+                  example: 15
+                notas:
+                  type: string
+                  example: "Mesa cerca de la ventana"
+                hold_id:
+                  type: integer
+                  example: 5
+                estatus_display:
+                  type: string
+                  example: "Programada"
+                puede_iniciar:
+                  type: boolean
+                  example: false
+                created_at:
+                  type: string
+                  format: date-time
       400:
-        description: Validación fallida
+        description: "Error de validación o datos inválidos"
+        schema:
+          type: object
+          properties:
+            error:
+              type: string
+              example: "Datos inválidos"
+            detalles:
+              type: object
+              example: {"fin_estimado": ["fin_estimado debe ser posterior a inicio"]}
       404:
-        description: Hold no existe
+        description: "Hold no existe"
+        schema:
+          type: object
+          properties:
+            error:
+              type: string
+              example: "Hold 5 no existe"
       409:
-        description: Hold expirado
+        description: "Hold expirado o no está activo"
+        schema:
+          type: object
+          properties:
+            error:
+              type: string
+              example: "Hold 5 ya expiró"
+      500:
+        description: "Error interno del servidor"
+        schema:
+          type: object
+          properties:
+            error:
+              type: string
+              example: "Error al crear reserva: ..."
+    x-code-samples:
+      - lang: curl
+        source: |
+          curl -X POST http://localhost:5000/api/reservas/ \\
+            -H "Content-Type: application/json" \\
+            -H "Authorization: Bearer YOUR_JWT_TOKEN" \\
+            -d '{
+              "cliente_id": 1,
+              "recepcionista_id": 2,
+              "inicio": "2025-11-18T19:00:00",
+              "fin_estimado": "2025-11-18T20:30:00",
+              "tolerancia_min": 15,
+              "notas": "Mesa cerca de la ventana",
+              "hold_id": 5
+            }'
     """
     try:
         # Validar schema
@@ -65,11 +181,10 @@ def crear_reserva():
         
         # Usuario autenticado
         current_user = get_jwt_identity()
-        usuario_id = current_user.get('id_usuario')
         
         # Crear reserva
         result = ReservaService.crear_reserva(
-            usuario_id=usuario_id,
+            usuario_id=current_user,
             cliente_id=data.get('cliente_id'),
             recepcionista_id=data.get('recepcionista_id'),
             inicio=data['inicio'],
@@ -105,47 +220,90 @@ def crear_reserva():
 @jwt_required()
 def obtener_reserva(reserva_id):
     """
-    Obtener detalles de una reserva
+    Obtener detalles de una reserva por ID.
     ---
     tags:
       - Reservas
-    summary: Obtener reserva por ID
-    description: Retrieves detailed information about a specific reservation including customer, mesa, and status information.
+    summary: "Paso 2: Obtener Reserva"
+    description: Obtiene la información completa de una reserva específica incluyendo cliente, mesa, estado actual y notas. Útil para verificar el estado antes de iniciar o completar una reserva.
     parameters:
       - in: path
         name: reserva_id
         type: integer
         required: true
-        description: ID de la reserva
+        description: "ID de la reserva a consultar. Ej: 10"
     responses:
       200:
-        description: Reserva encontrada
+        description: "Reserva encontrada exitosamente"
         schema:
           type: object
           properties:
             id_reserva:
               type: integer
-            mesa_id:
-              type: integer
+              example: 10
             cliente_id:
               type: integer
-            estatus:
+              example: 1
+            recepcionista_id:
               type: integer
-              description: "1=Programada, 2=EnCurso, 3=Completada, 4=NoShow, 5=Cancelada"
+              example: 2
             inicio:
               type: string
               format: date-time
+              example: "2025-11-18T19:00:00"
             fin_estimado:
               type: string
               format: date-time
-            usuario_creacion_id:
+              example: "2025-11-18T20:30:00"
+            estatus:
               type: integer
+              example: 1
+              description: "1=Programada, 2=EnCurso, 3=Completada, 4=NoShow, 5=Cancelada"
+            estatus_display:
+              type: string
+              example: "Programada"
+            tolerancia_min:
+              type: integer
+              example: 15
             notas:
               type: string
+              example: "Mesa cerca de la ventana"
+            hold_id:
+              type: integer
+              example: 5
+            puede_iniciar:
+              type: boolean
+              example: false
+              description: "Indica si está dentro de la ventana de tiempo permitida para iniciar"
+            created_at:
+              type: string
+              format: date-time
+              example: "2025-11-18T14:30:00"
+            updated_at:
+              type: string
+              format: date-time
+              example: null
       404:
-        description: Reserva no existe
+        description: "Reserva no existe"
+        schema:
+          type: object
+          properties:
+            error:
+              type: string
+              example: "Reserva 10 no existe"
       500:
-        description: Error interno
+        description: "Error interno del servidor"
+        schema:
+          type: object
+          properties:
+            error:
+              type: string
+              example: "Error al obtener reserva: ..."
+    x-code-samples:
+      - lang: curl
+        source: |
+          curl -X GET http://localhost:5000/api/reservas/10 \\
+            -H "Authorization: Bearer YOUR_JWT_TOKEN"
     """
     try:
         result = ReservaService.obtener_reserva(reserva_id)
@@ -164,38 +322,43 @@ def obtener_reserva(reserva_id):
 @jwt_required()
 def listar_reservas():
     """
-    Listar reservas con filtros
+    Listar todas las reservas con filtros opcionales.
     ---
     tags:
       - Reservas
-    summary: Listar reservas
-    description: Lists all reservations with optional filters by customer, status, and date range. Only returns reservations from the authenticated user's sucursal (multi-tenant).
+    summary: "Paso 2B: Listar Reservas (con filtros)"
+    description: Lista todas las reservas con posibilidad de filtrar por sucursal, cliente, estado y rango de fechas. Solo retorna reservas de la sucursal del usuario autenticado (multi-tenant). Útil para tableros y reportes.
     parameters:
+      - in: query
+        name: sucursal_id
+        type: integer
+        required: false
+        description: "Filtrar por ID de sucursal (opcional). Ej: ?sucursal_id=1"
       - in: query
         name: cliente_id
         type: integer
         required: false
-        description: Filtrar por cliente (opcional)
+        description: "Filtrar por ID de cliente (opcional). Ej: ?cliente_id=1"
       - in: query
         name: estatus
         type: integer
         required: false
-        description: "Filtrar por estatus: 1=Programada, 2=EnCurso, 3=Completada, 4=NoShow, 5=Cancelada (opcional)"
+        description: "Filtrar por estatus (opcional). 1=Programada, 2=EnCurso, 3=Completada, 4=NoShow, 5=Cancelada. Ej: ?estatus=1"
       - in: query
         name: fecha_desde
         type: string
-        format: date
+        format: 2025-11-19 14:00:00
         required: false
-        description: Desde fecha en formato ISO (opcional)
+        description: "Reservas desde esta fecha (ISO 8601, opcional). Ej: ?fecha_desde=2025-11-18T00:00:00"
       - in: query
         name: fecha_hasta
         type: string
-        format: date
+        format: 2025-11-19 14:00:00
         required: false
-        description: Hasta fecha en formato ISO (opcional)
+        description: "Reservas hasta esta fecha (ISO 8601, opcional). Ej: ?fecha_hasta=2025-11-18T23:59:59"
     responses:
       200:
-        description: Lista de reservas
+        description: "Lista de reservas obtenida exitosamente"
         schema:
           type: object
           properties:
@@ -206,24 +369,83 @@ def listar_reservas():
                 properties:
                   id_reserva:
                     type: integer
-                  mesa_id:
-                    type: integer
+                    example: 10
                   cliente_id:
                     type: integer
-                  estatus:
+                    example: 1
+                  recepcionista_id:
                     type: integer
+                    example: 2
                   inicio:
                     type: string
                     format: date-time
+                    example: "2025-11-18T19:00:00"
                   fin_estimado:
                     type: string
                     format: date-time
+                    example: "2025-11-18T20:30:00"
+                  estatus:
+                    type: integer
+                    example: 1
+                  estatus_display:
+                    type: string
+                    example: "Programada"
+                  tolerancia_min:
+                    type: integer
+                    example: 15
+                  notas:
+                    type: string
+                    example: "Mesa cerca de la ventana"
+                  hold_id:
+                    type: integer
+                    example: 5
+                  puede_iniciar:
+                    type: boolean
+                    example: false
+                  created_at:
+                    type: string
+                    format: date-time
+                    example: "2025-11-18T14:30:00"
             total:
               type: integer
+              example: 2
+              description: "Cantidad total de reservas que coinciden con los filtros"
       400:
-        description: Parametros invalidos
+        description: "Parámetros inválidos"
+        schema:
+          type: object
+          properties:
+            error:
+              type: string
+              example: "Parámetros inválidos"
+            detalles:
+              type: object
       500:
-        description: Error interno
+        description: "Error interno del servidor"
+        schema:
+          type: object
+          properties:
+            error:
+              type: string
+              example: "Error al listar reservas: ..."
+    x-code-samples:
+      - lang: curl
+        source: |
+          # Listar todas las reservas
+          curl -X GET http://localhost:5000/api/reservas/ \\
+            -H "Authorization: Bearer YOUR_JWT_TOKEN"
+
+          # Listar reservas de la sucursal 1
+          curl -X GET "http://localhost:5000/api/reservas/?sucursal_id=1" \\
+            -H "Authorization: Bearer YOUR_JWT_TOKEN"
+
+          # Listar reservas programadas del cliente 1 en sucursal 1
+          curl -X GET "http://localhost:5000/api/reservas/?sucursal_id=1&cliente_id=1&estatus=1" \\
+            -H "Authorization: Bearer YOUR_JWT_TOKEN"
+
+          # Listar reservas de una fecha específica en sucursal 1
+          curl -X GET "http://localhost:5000/api/reservas/?sucursal_id=1&fecha_desde=2025-11-18T00:00:00&fecha_hasta=2025-11-18T23:59:59" \\
+            -H "Authorization: Bearer YOUR_JWT_TOKEN"
     """
     try:
         # Parsear query params
@@ -232,11 +454,11 @@ def listar_reservas():
         
         # Usuario autenticado
         current_user = get_jwt_identity()
-        usuario_id = current_user.get('id_usuario')
         
         # Listar
         result = ReservaService.listar_reservas(
-            usuario_id=usuario_id,
+            usuario_id=current_user,
+            sucursal_id=filters.get('sucursal_id'),
             cliente_id=filters.get('cliente_id'),
             estatus=filters.get('estatus'),
             fecha_desde=filters.get('fecha_desde'),
@@ -263,48 +485,117 @@ def listar_reservas():
 @jwt_required()
 def iniciar_reserva(reserva_id):
     """
-    Iniciar reserva (cliente llego)
+    Iniciar reserva (cliente llegó a la mesa).
     ---
     tags:
       - Reservas
-    summary: Iniciar reserva
-    description: Marks a reservation as started (customer arrived). Changes status to 2 (EnCurso). Validates that the reservation is within allowed check-in window.
+    summary: "Paso 3: Iniciar Reserva"
+    description: Marca la reserva como iniciada cuando el cliente llega a su mesa. Cambia el estado a 2 (EnCurso). Valida que la reserva esté programada y que esté dentro de la ventana de tiempo permitida (inicio - tolerancia_min <= ahora).
     parameters:
       - in: path
         name: reserva_id
         type: integer
         required: true
-        description: ID de la reserva a iniciar
+        description: "ID de la reserva a iniciar. Ej: 10"
     responses:
       200:
-        description: Reserva iniciada exitosamente
+        description: "Reserva iniciada exitosamente"
         schema:
           type: object
           properties:
             message:
               type: string
+              example: "Reserva iniciada exitosamente"
             reserva:
               type: object
               properties:
                 id_reserva:
                   type: integer
+                  example: 10
+                cliente_id:
+                  type: integer
+                  example: 1
+                recepcionista_id:
+                  type: integer
+                  example: 2
+                inicio:
+                  type: string
+                  format: date-time
+                  example: "2025-11-18T19:00:00"
+                fin_estimado:
+                  type: string
+                  format: date-time
+                  example: "2025-11-18T20:30:00"
                 estatus:
                   type: integer
-                  description: "Sera 2 (EnCurso)"
+                  example: 2
+                  description: "Será 2 (EnCurso)"
+                estatus_display:
+                  type: string
+                  example: "En Curso"
+                tolerancia_min:
+                  type: integer
+                  example: 15
+                notas:
+                  type: string
+                  example: "Mesa cerca de la ventana"
+                hold_id:
+                  type: integer
+                  example: 5
+                puede_iniciar:
+                  type: boolean
+                  example: false
+                updated_at:
+                  type: string
+                  format: date-time
+                  example: "2025-11-18T18:47:00"
       400:
-        description: No esta en horario permitido, estatus incorrecto, o cliente no llego a tiempo
+        description: "Reserva no puede iniciarse"
+        schema:
+          type: object
+          properties:
+            error:
+              type: string
+              example: "Aún no es hora de iniciar. La reserva es a las 19:00, puedes llegar desde 18:45"
       404:
-        description: Reserva no existe
+        description: "Reserva no existe"
+        schema:
+          type: object
+          properties:
+            error:
+              type: string
+              example: "Reserva 10 no existe"
       500:
-        description: Error interno
+        description: "Error interno del servidor"
+        schema:
+          type: object
+          properties:
+            error:
+              type: string
+              example: "Error al iniciar reserva: ..."
+    x-validation-notes: |
+      VALIDACIONES INTERNAS:
+      1. Reserva debe existir (404 si no)
+      2. Reserva debe estar en estado Programada (estatus=1)
+      3. Hora actual debe ser >= (inicio - tolerancia_min)
+      
+      EJEMPLO:
+      - Reserva a las 19:00 con tolerancia de 15 min
+      - Puede iniciarse desde las 18:45 en adelante
+    x-code-samples:
+      - lang: curl
+        source: |
+          curl -X POST http://localhost:5000/api/reservas/10/iniciar \\
+            -H "Content-Type: application/json" \\
+            -H "Authorization: Bearer YOUR_JWT_TOKEN" \\
+            -d '{}'
     """
     try:
         # Usuario autenticado
         current_user = get_jwt_identity()
-        usuario_id = current_user.get('id_usuario')
         
         # Iniciar
-        result = ReservaService.iniciar_reserva(usuario_id, reserva_id)
+        result = ReservaService.iniciar_reserva(current_user, reserva_id)
         
         if not result['success']:
             if 'no existe' in result['error']:
@@ -326,48 +617,118 @@ def iniciar_reserva(reserva_id):
 @jwt_required()
 def completar_reserva(reserva_id):
     """
-    Completar reserva (cliente termino)
+    Completar reserva (cliente terminó su comida y se va).
     ---
     tags:
       - Reservas
-    summary: Completar reserva
-    description: Marks a reservation as completed. Changes status to 3 (Completada). This is done when the customer finishes their meal and leaves.
+    summary: "Paso 4: Completar Reserva"
+    description: Marca la reserva como completada cuando el cliente termina su comida y se va. Cambia el estado a 3 (Completada). Este es el paso previo a crear el Pedido y Pago. Valida que la reserva esté en estado EnCurso (2).
     parameters:
       - in: path
         name: reserva_id
         type: integer
         required: true
-        description: ID de la reserva a completar
+        description: "ID de la reserva a completar. Ej: 10"
     responses:
       200:
-        description: Reserva completada exitosamente
+        description: "Reserva completada exitosamente"
         schema:
           type: object
           properties:
             message:
               type: string
+              example: "Reserva completada exitosamente"
             reserva:
               type: object
               properties:
                 id_reserva:
                   type: integer
+                  example: 10
+                cliente_id:
+                  type: integer
+                  example: 1
+                recepcionista_id:
+                  type: integer
+                  example: 2
+                inicio:
+                  type: string
+                  format: date-time
+                  example: "2025-11-18T19:00:00"
+                fin_estimado:
+                  type: string
+                  format: date-time
+                  example: "2025-11-18T20:30:00"
                 estatus:
                   type: integer
-                  description: "Sera 3 (Completada)"
+                  example: 3
+                  description: "Será 3 (Completada)"
+                estatus_display:
+                  type: string
+                  example: "Completada"
+                tolerancia_min:
+                  type: integer
+                  example: 15
+                notas:
+                  type: string
+                  example: "Mesa cerca de la ventana"
+                hold_id:
+                  type: integer
+                  example: 5
+                puede_iniciar:
+                  type: boolean
+                  example: false
+                updated_at:
+                  type: string
+                  format: date-time
+                  example: "2025-11-18T20:25:00"
       400:
-        description: Estatus incorrecto o no puede completarse
+        description: "Reserva no puede completarse"
+        schema:
+          type: object
+          properties:
+            error:
+              type: string
+              example: "Reserva 10 no está en curso (estatus=1)"
       404:
-        description: Reserva no existe
+        description: "Reserva no existe"
+        schema:
+          type: object
+          properties:
+            error:
+              type: string
+              example: "Reserva 10 no existe"
       500:
-        description: Error interno
+        description: "Error interno del servidor"
+        schema:
+          type: object
+          properties:
+            error:
+              type: string
+              example: "Error al completar reserva: ..."
+    x-validation-notes: |
+      VALIDACIONES INTERNAS:
+      1. Reserva debe existir (404 si no)
+      2. Reserva debe estar en estado EnCurso (estatus=2)
+      3. Solo se puede completar cuando el cliente termina su comida
+      
+      SIGUIENTE PASO:
+      Después de completar la reserva, puedes proceder a:
+      - Crear Pedido: POST /api/pedidos/
+      - Crear Pago: POST /api/pagos/
+    x-code-samples:
+      - lang: curl
+        source: |
+          curl -X POST http://localhost:5000/api/reservas/10/completar \\
+            -H "Content-Type: application/json" \\
+            -H "Authorization: Bearer YOUR_JWT_TOKEN" \\
+            -d '{}'
     """
     try:
         # Usuario autenticado
         current_user = get_jwt_identity()
-        usuario_id = current_user.get('id_usuario')
         
         # Completar
-        result = ReservaService.completar_reserva(usuario_id, reserva_id)
+        result = ReservaService.completar_reserva(current_user, reserva_id)
         
         if not result['success']:
             if 'no existe' in result['error']:
@@ -389,50 +750,127 @@ def completar_reserva(reserva_id):
 @jwt_required()
 def cancelar_reserva(reserva_id):
     """
-    Cancelar reserva
+    Cancelar una reserva activa.
     ---
     tags:
       - Reservas
-    summary: Cancelar reserva
-    description: Cancels an active reservation. Changes status to 5 (Cancelada). Can only cancel from Programada (1) or EnCurso (2) status.
+    summary: "Paso 4B: Cancelar Reserva"
+    description: Cancela una reserva que aún está activa. Cambia el estado a 5 (Cancelada). Solo se puede cancelar si está en estado Programada (1) o EnCurso (2). No se pueden cancelar reservas ya completadas, NoShow o canceladas. Se puede proporcionar un motivo de la cancelación.
     parameters:
       - in: path
         name: reserva_id
         type: integer
         required: true
-        description: ID de la reserva a cancelar
-    requestBody:
-      required: false
-      content:
-        application/json:
-          schema:
-            type: object
-            properties:
-              motivo:
-                type: string
-                description: Razon de la cancelacion (opcional)
+        description: "ID de la reserva a cancelar. Ej: 10"
+      - in: body
+        name: body
+        required: false
+        schema:
+          type: object
+          properties:
+            motivo:
+              type: string
+              description: "Razón de la cancelación (opcional). Ej: 'Cliente pidió cancelación por cambio de planes'"
+        example:
+          motivo: "Cliente pidió cancelación por cambio de planes"
     responses:
       200:
-        description: Reserva cancelada exitosamente
+        description: "Reserva cancelada exitosamente"
         schema:
           type: object
           properties:
             message:
               type: string
+              example: "Reserva cancelada exitosamente"
             reserva:
               type: object
               properties:
                 id_reserva:
                   type: integer
+                  example: 10
+                cliente_id:
+                  type: integer
+                  example: 1
+                recepcionista_id:
+                  type: integer
+                  example: 2
+                inicio:
+                  type: string
+                  format: date-time
+                  example: "2025-11-18T19:00:00"
+                fin_estimado:
+                  type: string
+                  format: date-time
+                  example: "2025-11-18T20:30:00"
                 estatus:
                   type: integer
-                  description: "Sera 5 (Cancelada)"
+                  example: 5
+                  description: "Será 5 (Cancelada)"
+                estatus_display:
+                  type: string
+                  example: "Cancelada"
+                tolerancia_min:
+                  type: integer
+                  example: 15
+                notas:
+                  type: string
+                  example: "Mesa cerca de la ventana"
+                hold_id:
+                  type: integer
+                  example: 5
+                puede_iniciar:
+                  type: boolean
+                  example: false
+                updated_at:
+                  type: string
+                  format: date-time
+                  example: "2025-11-18T18:50:00"
       400:
-        description: Estatus incorrecto o no puede cancelarse, o datos invalidos
+        description: "Reserva no puede cancelarse o datos inválidos"
+        schema:
+          type: object
+          properties:
+            error:
+              type: string
+              example: "No se puede cancelar. Reserva en estatus 3"
       404:
-        description: Reserva no existe
+        description: "Reserva no existe"
+        schema:
+          type: object
+          properties:
+            error:
+              type: string
+              example: "Reserva 10 no existe"
       500:
-        description: Error interno
+        description: "Error interno del servidor"
+        schema:
+          type: object
+          properties:
+            error:
+              type: string
+              example: "Error al cancelar reserva: ..."
+    x-validation-notes: |
+      VALIDACIONES INTERNAS:
+      1. Reserva debe existir (404 si no)
+      2. Reserva debe estar en estado Programada (1) o EnCurso (2)
+      3. No se puede cancelar: Completada (3), NoShow (4) o Cancelada (5)
+      
+      ESTADOS EN LOS QUE SE PUEDE CANCELAR:
+      - Estado 1 (Programada): Cliente cancela antes de llegar
+      - Estado 2 (EnCurso): Cliente cancela después de haber llegado pero antes de terminar
+      
+      MOTIVO:
+      - Opcional pero recomendado para auditoría
+      - Máx 255 caracteres
+    x-code-samples:
+      - lang: curl
+        source: |
+          curl -X POST http://localhost:5000/api/reservas/10/cancelar \\
+            -H "Content-Type: application/json" \\
+            -H "Authorization: Bearer YOUR_JWT_TOKEN" \\
+            -d '{
+              "motivo": "Cliente pidió cancelación por cambio de planes"
+            }'
     """
     try:
         # Validar schema
@@ -441,11 +879,10 @@ def cancelar_reserva(reserva_id):
         
         # Usuario autenticado
         current_user = get_jwt_identity()
-        usuario_id = current_user.get('id_usuario')
         
         # Cancelar
         result = ReservaService.cancelar_reserva(
-            usuario_id,
+            current_user,
             reserva_id,
             data.get('motivo')
         )
@@ -473,52 +910,126 @@ def cancelar_reserva(reserva_id):
 @jwt_required()
 def marcar_no_show(reserva_id):
     """
-    Marcar reserva como NoShow
+    Marcar reserva como NoShow (cliente no llegó).
     ---
     tags:
       - Reservas
-    summary: Marcar como NoShow
-    description: Manually marks a reservation as NoShow (status 4). Only recepcionistas/admins can perform this action. Should be used when a customer with a reservation does not show up by the end of the tolerance window.
+    summary: "Paso 4C: Marcar como NoShow"
+    description: Marca una reserva como NoShow cuando el cliente no llega dentro de la ventana de tolerancia. Cambia el estado a 4 (NoShow). Solo recepcionistas y administradores pueden realizar esta acción. Se usa típicamente cuando el cliente no se presenta después del tiempo de tolerancia transcurrido.
     parameters:
       - in: path
         name: reserva_id
         type: integer
         required: true
-        description: ID de la reserva a marcar como NoShow
+        description: "ID de la reserva a marcar como NoShow. Ej: 10"
     responses:
       200:
-        description: Reserva marcada como NoShow exitosamente
+        description: "Reserva marcada como NoShow exitosamente"
         schema:
           type: object
           properties:
             message:
               type: string
+              example: "Reserva marcada como NoShow"
             reserva:
               type: object
               properties:
                 id_reserva:
                   type: integer
+                  example: 10
+                cliente_id:
+                  type: integer
+                  example: 1
+                recepcionista_id:
+                  type: integer
+                  example: 2
+                inicio:
+                  type: string
+                  format: date-time
+                  example: "2025-11-18T19:00:00"
+                fin_estimado:
+                  type: string
+                  format: date-time
+                  example: "2025-11-18T20:30:00"
                 estatus:
                   type: integer
-                  description: "Sera 4 (NoShow)"
+                  example: 4
+                  description: "Será 4 (NoShow)"
+                estatus_display:
+                  type: string
+                  example: "No Show"
+                tolerancia_min:
+                  type: integer
+                  example: 15
+                notas:
+                  type: string
+                  example: "Mesa cerca de la ventana"
+                hold_id:
+                  type: integer
+                  example: 5
+                puede_iniciar:
+                  type: boolean
+                  example: false
+                updated_at:
+                  type: string
+                  format: date-time
+                  example: "2025-11-18T20:45:00"
       400:
-        description: Estatus incorrecto o no puede marcarse como NoShow
+        description: "Reserva no puede marcarse como NoShow"
+        schema:
+          type: object
+          properties:
+            error:
+              type: string
+              example: "Solo se puede marcar NoShow si está programada (estatus=1)"
       403:
-        description: Sin permisos para marcar como NoShow (requiere recepcionista/admin)
+        description: "Sin permisos suficientes"
+        schema:
+          type: object
+          properties:
+            error:
+              type: string
+              example: "Sin permisos para marcar como NoShow (requiere recepcionista/admin)"
       404:
-        description: Reserva no existe
+        description: "Reserva no existe"
+        schema:
+          type: object
+          properties:
+            error:
+              type: string
+              example: "Reserva 10 no existe"
       500:
-        description: Error interno
+        description: "Error interno del servidor"
+        schema:
+          type: object
+          properties:
+            error:
+              type: string
+              example: "Error al marcar NoShow: ..."
+    x-validation-notes: |
+      VALIDACIONES INTERNAS:
+      1. Reserva debe existir (404 si no)
+      2. Reserva debe estar en estado Programada (estatus=1)
+      3. Solo roles: recepcionista/admin (403 si no tiene permisos)
+      
+      CUÁNDO USAR:
+      - Cuando ha pasado el tiempo de tolerancia desde la hora de inicio
+      - Cuando el cliente no llegó a la mesa
+      - Típicamente: inicio + tolerancia_min <= ahora
+    x-code-samples:
+      - lang: curl
+        source: |
+          curl -X POST http://localhost:5000/api/reservas/10/no-show \\
+            -H "Content-Type: application/json" \\
+            -H "Authorization: Bearer YOUR_JWT_TOKEN" \\
+            -d '{}'
     """
     try:
         # Usuario autenticado
-        current_user = get_jwt_identity()
-        usuario_id = current_user.get('id_usuario')
-        
-        # TODO: Validar rol de usuario (recepcionista/admin)
+        current_user = get_jwt_identity()    
         
         # Marcar
-        result = ReservaService.marcar_no_show(usuario_id, reserva_id)
+        result = ReservaService.marcar_no_show(current_user, reserva_id)
         
         if not result['success']:
             if 'no existe' in result['error']:

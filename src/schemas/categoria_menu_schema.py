@@ -3,6 +3,7 @@ CategoriaMenu Schema - Validación y serialización
 """
 
 from marshmallow import Schema, fields, validate
+from src.schemas.helpers import FormattedDateTime
 
 
 class CategoriaMenuCreateSchema(Schema):
@@ -29,8 +30,8 @@ class CategoriaMenuResponseSchema(Schema):
     nombre = fields.Str()
     descripcion = fields.Str(allow_none=True)
     es_activa = fields.Bool()
-    created_at = fields.DateTime(allow_none=True, format='%Y-%m-%d %H:%M:%S')
-    updated_at = fields.DateTime(allow_none=True, format='%Y-%m-%d %H:%M:%S')
+    created_at = FormattedDateTime(allow_none=True)
+    updated_at = FormattedDateTime(allow_none=True)
 
     class Meta:
         strict = True

@@ -36,69 +36,88 @@ bp = Blueprint('pedidos', __name__, url_prefix='/api/pedidos')
 @jwt_required()
 def crear_pedido():
     """
-    Crear pedido ligado a una reserva.
+    Crear nuevo pedido ligado a una reserva.
     ---
     tags:
       - Pedidos
-    summary: Crear nuevo pedido
-    description: Crea un nuevo pedido vinculado a una reserva. Validaciones automáticas para reserva existente y sin duplicados.
-    requestBody:
-      required: true
-      content:
-        application/json:
-          schema:
-            type: object
-            required:
-              - reserva_id
-              - sucursal_id
-              - inicia_usuario_id
-            properties:
-              reserva_id:
-                type: integer
-                description: ID de la reserva
-                example: 15
-              sucursal_id:
-                type: integer
-                description: ID de la sucursal
-                example: 1
-              inicia_usuario_id:
-                type: integer
-                description: ID del usuario que inicia (cliente, mesero, etc)
-                example: 5
-              cliente_id:
-                type: integer
-                description: ID del cliente (opcional)
-              tipo_pedido:
-                type: integer
-                description: 1=Dine-in, 2=Pickup, 3=Delivery (default 1)
-                default: 1
-              canal:
-                type: integer
-                description: 1=Mesero, 2=Sistema, 3=App (default 2)
-                default: 2
-              notas:
-                type: string
-                description: Notas del pedido
+    summary: "Paso 1: Crear Pedido"
+    description: Crea un nuevo pedido vinculado a una reserva completada. El pedido es donde se agregan los items (productos/combos) que el cliente va a consumir. Un pedido solo puede tener un asociado por reserva (validación automática).
+    parameters:
+      - in: body
+        name: body
+        required: true
+        schema:
+          type: object
+          required:
+            - reserva_id
+            - sucursal_id
+            - inicia_usuario_id
+          properties:
+            reserva_id:
+              type: integer
+              description: "ID de la reserva completada (debe estar en estado Completada=3). Ej: 10"
+            sucursal_id:
+              type: integer
+              description: "ID de la sucursal donde se crea el pedido. Ej: 1"
+            inicia_usuario_id:
+              type: integer
+              description: "ID del usuario que inicia el pedido (mesero, cliente, etc). Ej: 5"
+            cliente_id:
+              type: integer
+              description: "ID del cliente (opcional). Ej: 1"
+            tipo_pedido:
+              type: integer
+              description: "Tipo de pedido (default: 1). 1=Dine-in (en el restaurante), 2=Pickup (recoge después), 3=Delivery (entrega a domicilio)"
+              default: 1
+            canal:
+              type: integer
+              description: "Canal por el que se realiza el pedido (default: 2). 1=Mesero (manual), 2=Sistema (POS), 3=App (aplicación móvil)"
+              default: 2
+            notas:
+              type: string
+              description: "Notas o instrucciones especiales del pedido. Ej: 'Sin cebolla, sin queso'. (opcional)"
+        example:
+          reserva_id: 10
+          sucursal_id: 1
+          inicia_usuario_id: 5
+          cliente_id: 1
+          tipo_pedido: 1
+          canal: 2
+          notas: "Cliente con alergia al maní"
     responses:
       201:
-        description: Pedido creado exitosamente
-        content:
-          application/json:
-            schema:
+        description: "Pedido creado exitosamente"
+        schema:
+          type: object
+          properties:
+            message:
+              type: string
+              example: "Pedido creado exitosamente"
+            pedido:
               type: object
-              properties:
-                message:
-                  type: string
-                pedido:
-                  type: object
       400:
-        description: Validación fallida o error en datos
+        description: "Validación fallida o datos inválidos"
       403:
-        description: Sin acceso a la sucursal
+        description: "Sin acceso a la sucursal"
       404:
-        description: Reserva no existe
+        description: "Reserva no existe"
       409:
-        description: Pedido ya existe para esta reserva
+        description: "Pedido ya existe para esta reserva"
+    x-code-samples:
+      - lang: curl
+        source: |
+          curl -X POST http://localhost:5000/api/pedidos/ \\
+            -H "Content-Type: application/json" \\
+            -H "Authorization: Bearer YOUR_JWT_TOKEN" \\
+            -d '{
+              "reserva_id": 10,
+              "sucursal_id": 1,
+              "inicia_usuario_id": 5,
+              "cliente_id": 1,
+              "tipo_pedido": 1,
+              "canal": 2,
+              "notas": "Cliente con alergia al maní"
+            }'
     """
     try:
         # Validar schema
@@ -355,63 +374,93 @@ def agregar_item(pedido_id):
 @jwt_required()
 def confirmar_items_a_cocina(pedido_id):
     """
-    Confirmar items para enviar a cocina - *** TRIGGERS INVENTORY CONSUMPTION ***.
+    Confirmar items y enviar a cocina - ⚠️ TRIGGERS INVENTORY CONSUMPTION.
     ---
     tags:
       - Pedidos - Items
       - Inventario
-    summary: Confirmar items y consumir inventario (CRITICAL)
+    summary: "Paso 3: Confirmar Items a Cocina (CRITICAL)"
     description: |
-      **⚠️ CRITICAL OPERATION ⚠️**
+      **⚠️ OPERACIÓN CRÍTICA ⚠️**
       
-      Confirma items para ir a cocina. ESTO DISPARA EL CONSUMO DE INVENTARIO.
-      - Cambio de estatus items: 2 (Confirmado) → 3 (EnCocina)
+      Confirma items y los envía a cocina. ESTO DISPARA EL CONSUMO IRREVERSIBLE DE INVENTARIO.
+      
+      IMPORTANTE:
+      - Cambio de estatus: 1 (Agregado) → 2 (Confirmado) → 3 (EnCocina)
       - ATOMIC: Todo o nada (all-or-nothing)
       - IRREVERSIBLE: Una vez consumido, NO hay rollback automático
       - FIFO: Usa lotes más próximos a vencer primero
-      - Si falla inventario: Revierte estatus items automaticamente
+      - Si falla inventario: Revierte cambios automáticamente
+      - Máximo 50 items por operación
       
+      PRECONDICIONES:
+      1. Pedido debe estar Abierto (estado=1)
+      2. Items deben estar en estado Agregado (1)
+      3. Debe haber inventario suficiente
     parameters:
       - in: path
         name: pedido_id
         type: integer
         required: true
-    requestBody:
-      required: true
-      content:
-        application/json:
-          schema:
-            type: object
-            required:
-              - item_ids
-            properties:
-              item_ids:
-                type: array
-                items:
-                  type: integer
-                description: IDs de items a confirmar (máx 50)
-                example: [1, 2, 3]
+        description: "ID del pedido. Ej: 25"
+      - in: body
+        name: body
+        required: true
+        schema:
+          type: object
+          required:
+            - item_ids
+          properties:
+            item_ids:
+              type: array
+              items:
+                type: integer
+              description: "Array de IDs de items a confirmar. Máximo 50. Ej: [1, 2, 3]"
+        example:
+          item_ids: [1, 2]
     responses:
       200:
-        description: Items confirmados e inventario consumido exitosamente
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                message:
-                  type: string
-                items_confirmados:
-                  type: integer
-                movimientos_inventario:
-                  type: array
-                  description: Movimientos de inventario realizados
+        description: "Items confirmados e inventario consumido exitosamente"
+        schema:
+          type: object
+          properties:
+            message:
+              type: string
+              example: "Items confirmados y enviados a cocina"
+            items_confirmados:
+              type: integer
+              example: 2
+            movimientos_inventario:
+              type: array
+              description: "Detalles de los movimientos de inventario realizados"
       400:
-        description: Validación fallida o inventario insuficiente
+        description: "Validación fallida o inventario insuficiente"
+        schema:
+          type: object
+          properties:
+            error:
+              type: string
+              example: "Inventario insuficiente"
       403:
-        description: Sin acceso a sucursal
+        description: "Sin acceso a sucursal"
       404:
-        description: Pedido o items no existen
+        description: "Pedido o items no existen"
+    x-validation-notes: |
+      VALIDACIONES INTERNAS:
+      1. Pedido debe existir y estar en estado Abierto (1)
+      2. Items deben existir y estar en estado Agregado (1)
+      3. Verificar inventario disponible (FIFO por lote)
+      4. Si falla: Revierte todo automáticamente
+      5. Registra movimientos de inventario en auditoría
+    x-code-samples:
+      - lang: curl
+        source: |
+          curl -X POST http://localhost:5000/api/pedidos/25/confirmar-items \\
+            -H "Content-Type: application/json" \\
+            -H "Authorization: Bearer YOUR_JWT_TOKEN" \\
+            -d '{
+              "item_ids": [1, 2]
+            }'
     """
     try:
         schema = PedidoConfirmarItemsSchema()
