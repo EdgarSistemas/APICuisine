@@ -590,7 +590,8 @@ def listar_reservas_por_mesero(usuario_id):
         return jsonify({"error": f"Error interno: {str(e)}"}), 500
 
 
-@reserva_bp.route('/<int:reserva_id>/iniciar', methods=['POST'])
+
+@reserva_bp.route('/<int:reserva_id>', methods=['GET'])
 @jwt_required()
 def iniciar_reserva(reserva_id):
     """

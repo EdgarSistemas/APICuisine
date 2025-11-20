@@ -77,22 +77,21 @@ class AuthDAO:
                 # 3 ambos
                 # verificar de que plataforma viene la peticion y filtrar en la tabla RolModulo
                 from src.models.auth import Modulo, RolModulo
+                
+                # Definir el filtro de plataforma
+                if plataforma == 'web':
+                    plataforma_filter = or_(RolModulo.plataforma == 1, RolModulo.plataforma == 3)
+                elif plataforma == 'movil':
+                    plataforma_filter = or_(RolModulo.plataforma == 2, RolModulo.plataforma == 3)
+                else:
+                    # Si no se especifica, traer ambas plataformas (1, 2, 3)
+                    plataforma_filter = or_(RolModulo.plataforma == 1, RolModulo.plataforma == 2, RolModulo.plataforma == 3)
+                
                 modulos = session.query(Modulo)\
                     .join(RolModulo, Modulo.id_modulo == RolModulo.modulo_id)\
                     .join(UsuarioRol, RolModulo.rol_id == UsuarioRol.rol_id)\
                     .filter(UsuarioRol.usuario_id == usuario.id_usuario)\
-                    .filter(
-                        or_(
-                            and_(
-                                plataforma == 'web',
-                                or_(RolModulo.plataforma == 1, RolModulo.plataforma == 3)
-                            ),
-                            and_(
-                                plataforma == 'movil',
-                                or_(RolModulo.plataforma == 2, RolModulo.plataforma == 3)
-                            )
-                        )
-                    )\
+                    .filter(plataforma_filter)\
                     .filter(RolModulo.habilitado == True)\
                     .filter(Modulo.es_activo == True)\
                     .all()
