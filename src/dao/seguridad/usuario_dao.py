@@ -4,6 +4,7 @@ Queries para filtrar usuarios por rol y sucursal
 """
 
 from src.models import Usuario, UsuarioSucursal, Sucursal
+from src.models.auth import UsuarioRol
 from src.core.db.session_manager import get_db_session
 import logging
 
@@ -28,7 +29,10 @@ class UsuarioDAO:
             Lista de Usuario
         """
         with get_db_session() as session:
-            query = session.query(Usuario).filter(Usuario.rol_id == rol_id)
+            # Hacer JOIN con UsuarioRol para acceder a rol_id
+            query = session.query(Usuario).join(
+                UsuarioRol, Usuario.id_usuario == UsuarioRol.usuario_id
+            ).filter(UsuarioRol.rol_id == rol_id)
             
             # Si se filtra por sucursal, hacer JOIN con UsuarioSucursal
             if sucursal_id:
@@ -36,7 +40,7 @@ class UsuarioDAO:
                     UsuarioSucursal.sucursal_id == sucursal_id
                 )
             
-            usuarios = query.filter(Usuario.activo == True).order_by(Usuario.nombre).all()
+            usuarios = query.filter(Usuario.es_activo == True).order_by(Usuario.nombre).all()
             return usuarios
     
     
@@ -52,6 +56,36 @@ class UsuarioDAO:
             Lista de Usuario (solo Meseros)
         """
         return UsuarioDAO.obtener_usuarios_por_rol(rol_id=5, sucursal_id=sucursal_id)
+    
+    
+    @staticmethod
+    def obtener_usuarios_por_rol_y_sucursal(rol_id: int, sucursal_id: int) -> list:
+        """
+        Obtener usuarios filtrados por rol y sucursal (ambos obligatorios).
+        
+        Args:
+            rol_id: ID del rol (obligatorio)
+            sucursal_id: ID de la sucursal (obligatorio)
+            
+        Returns:
+            Lista de dicts con datos del usuario
+        """
+        from src.schemas.usuario_schema import UsuarioResponseSchema
+        
+        schema = UsuarioResponseSchema()
+        with get_db_session() as session:
+            # JOIN con UsuarioRol y UsuarioSucursal para acceder a rol_id y sucursal_id
+            usuarios = session.query(Usuario).join(
+                UsuarioRol, Usuario.id_usuario == UsuarioRol.usuario_id
+            ).join(
+                UsuarioSucursal, Usuario.id_usuario == UsuarioSucursal.usuario_id
+            ).filter(
+                UsuarioRol.rol_id == rol_id,
+                UsuarioSucursal.sucursal_id == sucursal_id,
+                Usuario.es_activo == True
+            ).order_by(Usuario.nombre.asc()).all()
+            
+            return [schema.dump(u) for u in usuarios]
     
     
     @staticmethod

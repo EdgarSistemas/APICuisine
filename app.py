@@ -5,7 +5,6 @@ from flask_jwt_extended import JWTManager
 from src.core.config import get_config
 from src.core.db.pool_manager import pool_manager
 from src.core.swagger_config import init_swagger
-from src.core.scheduler import init_scheduler
 
 # Importar blueprints
 from src.controller.AuthController import auth_bp
@@ -38,6 +37,7 @@ from src.controller.AsistenciaController import asistencia_bp
 from src.controller.SolicitudVacacionesController import solicitud_vacaciones_bp
 from src.controller.HoldMesaController import hold_mesa_bp
 from src.controller.ReservaController import reserva_bp
+from src.controller.MesaEstatusController import mesa_estatus_bp
 from src.controller.JobsController import jobs_bp
 from src.controller.PushNotificationController import bp as push_notifications_bp
  
@@ -64,25 +64,6 @@ def create_app():
   
   # Inicializar Swagger con Flasgger
   init_swagger(app)
-
-  # Iniciar jobs programados (APScheduler) en bloque seguro
-  from src.core.scheduler import get_scheduler_status
-  try:
-      init_scheduler()
-      scheduler_status = get_scheduler_status()
-      if not scheduler_status['running']:
-          import logging
-          logging.getLogger(__name__).critical(
-              "⚠️  ADVERTENCIA: El scheduler no está corriendo. "
-              "Los holds NO se expirarán automáticamente."
-          )
-  except Exception as e:
-      import logging
-      logging.getLogger(__name__).critical(
-          f"✗ ERROR CRÍTICO al iniciar scheduler: {str(e)}\n"
-          "⚠️  Los holds NO se expirarán automáticamente."
-      )
-      logging.getLogger(__name__).exception(e)
 
   # Registrar blueprints
   app.register_blueprint(auth_bp)
@@ -115,6 +96,7 @@ def create_app():
   app.register_blueprint(solicitud_vacaciones_bp)
   app.register_blueprint(hold_mesa_bp)
   app.register_blueprint(reserva_bp)
+  app.register_blueprint(mesa_estatus_bp)
   app.register_blueprint(jobs_bp)
   app.register_blueprint(push_notifications_bp)
 
@@ -153,75 +135,6 @@ def create_app():
                 example: "API funcionando"
       """
       return {"status": "OK", "message": "API funcionando"}, 200
-
-  @app.route('/health/scheduler')
-  def health_scheduler():
-      """
-      Estado del scheduler automático
-      ---
-      tags:
-        - Sistema
-      summary: Health check del scheduler
-      description: Verifica el estado del scheduler de jobs automáticos (expiración de holds, etc)
-      responses:
-        200:
-          description: Scheduler funcionando correctamente
-          schema:
-            type: object
-            properties:
-              status:
-                type: string
-                example: "OK"
-              scheduler:
-                type: object
-                properties:
-                  initialized:
-                    type: boolean
-                    example: true
-                  running:
-                    type: boolean
-                    example: true
-                  last_check:
-                    type: string
-                    format: date-time
-                    example: "2025-11-17T10:30:45.123456"
-                  error:
-                    type: string
-                    nullable: true
-        503:
-          description: Scheduler no está funcionando correctamente
-          schema:
-            type: object
-            properties:
-              status:
-                type: string
-                example: "ERROR"
-              scheduler:
-                type: object
-      """
-      from src.core.scheduler import get_scheduler_status
-      status = get_scheduler_status()
-      
-      if status['running']:
-          return {
-              "status": "OK",
-              "scheduler": {
-                  "initialized": status['initialized'],
-                  "running": status['running'],
-                  "last_check": status['last_check'].isoformat() if status['last_check'] else None,
-                  "error": status['error']
-              }
-          }, 200
-      else:
-          return {
-              "status": "ERROR",
-              "scheduler": {
-                  "initialized": status['initialized'],
-                  "running": status['running'],
-                  "last_check": status['last_check'].isoformat() if status['last_check'] else None,
-                  "error": status['error']
-              }
-          }, 503
 
   @app.route('/test-simple')
   def test_simple():

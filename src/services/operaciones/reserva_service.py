@@ -54,7 +54,7 @@ class ReservaService:
             {success: bool, data?: dict, error?: str}
         """
         try:
-            # Si viene de hold, validar
+            # Si viene de hold, validar que existe y está activo
             if hold_id:
                 hold = HoldMesaDAO.obtener_hold_por_id(hold_id)
                 
@@ -79,10 +79,8 @@ class ReservaService:
                 if ahora_mexico > expires_at:
                     return {"success": False, "error": f"Hold {hold_id} ya expiró"}
                 
-                # Usar datos del hold
-                mesa_id = hold['mesa_id']
-                inicio = hold['inicio']
-                fin_estimado = hold['fin_estimado']
+                # Hold validado - usar fechas del payload (ya parseadas correctamente por Marshmallow)
+                # NO sobrescribir con fechas del hold, usar las que envió el cliente
                 
             else:
                 # Validación manual (sin hold)
@@ -180,6 +178,27 @@ class ReservaService:
         except Exception as e:
             logger.error(f"Error en ReservaService.listar_reservas: {str(e)}")
             return {"success": False, "error": f"Error al listar reservas: {str(e)}"}
+    
+    
+    @staticmethod
+    def listar_reservas_por_mesero(usuario_id: int) -> dict:
+        """
+        Listar reservas asignadas a un mesero.
+        Ordenadas por estatus (de menor a mayor).
+        
+        Args:
+            usuario_id: ID del mesero (usuario)
+            
+        Returns:
+            {success: bool, data?: list, error?: str}
+        """
+        try:
+            reservas = ReservaDAO.listar_reservas_por_mesero(usuario_id)
+            return {"success": True, "data": reservas}
+            
+        except Exception as e:
+            logger.error(f"Error en ReservaService.listar_reservas_por_mesero: {str(e)}")
+            return {"success": False, "error": f"Error al listar reservas del mesero: {str(e)}"}
     
     
     @staticmethod

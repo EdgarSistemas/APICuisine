@@ -421,16 +421,51 @@ def activar_usuario(usuario_id):
 @jwt_required()
 def listar_meseros():
     """
-    GET /api/usuarios/meseros?sucursal_id=X
-    Listar todos los meseros (rol_id=5) de una sucursal.
-    
-    Query params:
-        - sucursal_id: ID de la sucursal (requerido)
-    
-    Returns:
-        200 OK - Lista de meseros
-        400 Bad Request - sucursal_id requerido
-        403 Forbidden - Sin acceso
+    Listar meseros de una sucursal
+    ---
+    tags:
+      - Usuarios
+    security:
+      - Bearer: []
+    parameters:
+      - in: query
+        name: sucursal_id
+        type: integer
+        required: true
+        description: ID de la sucursal
+    responses:
+      200:
+        description: Lista de meseros de la sucursal
+        schema:
+          type: object
+          properties:
+            success:
+              type: boolean
+              example: true
+            data:
+              type: array
+              items:
+                type: object
+                properties:
+                  id_usuario:
+                    type: integer
+                  nombre:
+                    type: string
+                  email:
+                    type: string
+                  rol_id:
+                    type: integer
+                  sucursal_id:
+                    type: integer
+            total:
+              type: integer
+              description: Cantidad total de meseros
+      400:
+        description: Parámetro sucursal_id es requerido
+      403:
+        description: Acceso denegado - no tiene permiso para esta sucursal
+      500:
+        description: Error interno del servidor
     """
     try:
         usuario_id = get_jwt_identity()
@@ -470,4 +505,115 @@ def listar_meseros():
         return jsonify({
             "success": False,
             "error": f"Error al listar meseros: {str(e)}"
+        }), 500
+
+
+@usuario_bp.route('/filtrar', methods=['GET'])
+@jwt_required()
+def filtrar_usuarios_por_rol_sucursal():
+    """
+    Filtrar usuarios por rol y sucursal
+    ---
+    tags:
+      - Usuarios
+    security:
+      - Bearer: []
+    parameters:
+      - in: query
+        name: rol_id
+        type: integer
+        required: true
+        description: ID del rol (1=Admin, 2=Gerente, 5=Mesero, etc)
+      - in: query
+        name: sucursal_id
+        type: integer
+        required: true
+        description: ID de la sucursal
+    responses:
+      200:
+        description: Lista de usuarios filtrados por rol y sucursal
+        schema:
+          type: object
+          properties:
+            success:
+              type: boolean
+              example: true
+            data:
+              type: array
+              items:
+                type: object
+                properties:
+                  id_usuario:
+                    type: integer
+                  nombre:
+                    type: string
+                  email:
+                    type: string
+                  rol_id:
+                    type: integer
+                  sucursal_id:
+                    type: integer
+            total:
+              type: integer
+              description: Cantidad total de usuarios encontrados
+            filtros:
+              type: object
+              properties:
+                rol_id:
+                  type: integer
+                sucursal_id:
+                  type: integer
+      400:
+        description: Faltan parámetros obligatorios (rol_id y sucursal_id)
+      403:
+        description: Acceso denegado - no tiene permiso para esta sucursal
+      500:
+        description: Error interno del servidor
+    """
+    try:
+        usuario_id = get_jwt_identity()
+        rol_id = request.args.get('rol_id', type=int)
+        sucursal_id = request.args.get('sucursal_id', type=int)
+        
+        # Validar que ambos parámetros sean provided
+        if not rol_id or not sucursal_id:
+            return jsonify({
+                "success": False,
+                "error": "Los parámetros 'rol_id' y 'sucursal_id' son obligatorios"
+            }), 400
+        
+        # VALIDACIÓN: Si no es ADMIN, verificar acceso a sucursal
+        from src.core.utils.multitenant import es_admin, validar_pertenencia_sucursal
+        if not es_admin(usuario_id):
+            if not validar_pertenencia_sucursal(usuario_id, sucursal_id):
+                logger.warning(f"Usuario {usuario_id} intentó filtrar usuarios sin acceso a sucursal {sucursal_id}")
+                return jsonify({
+                    "success": False,
+                    "error": "No tiene acceso a esta sucursal"
+                }), 403
+        
+        # Obtener usuarios
+        resultado = usuario_service.obtener_usuarios_por_rol_y_sucursal(rol_id, sucursal_id)
+        
+        if not resultado['success']:
+            return jsonify(resultado), 400
+        
+        usuarios = resultado['data']
+        logger.info(f"Usuario {usuario_id} filtró {len(usuarios)} usuarios con rol_id={rol_id} y sucursal_id={sucursal_id}")
+        
+        return jsonify({
+            "success": True,
+            "data": usuarios,
+            "total": len(usuarios),
+            "filtros": {
+                "rol_id": rol_id,
+                "sucursal_id": sucursal_id
+            }
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error en GET /api/usuarios/filtrar: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": f"Error al filtrar usuarios: {str(e)}"
         }), 500

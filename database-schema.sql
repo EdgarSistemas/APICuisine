@@ -66,6 +66,17 @@ CREATE TABLE [catalogos].[Mesa] (
 );
 GO
 
+CREATE TABLE [catalogos].[MesaEstatus] (
+  [id_mesa_estatus] INT PRIMARY KEY IDENTITY(1,1),
+  [mesa_id] INT NOT NULL UNIQUE,
+  [estatus] SMALLINT NOT NULL DEFAULT (1),
+  [cambio_por] INT,
+  [notas] NVARCHAR(200),
+  [created_at] DATETIME2 NOT NULL DEFAULT (SYSUTCDATETIME()),
+  [updated_at] DATETIME2
+);
+GO
+
 CREATE TABLE [catalogos].[CategoriaMenu] (
   [id_categoria] INT PRIMARY KEY IDENTITY(1,1),
   [nombre] NVARCHAR(30) NOT NULL,
@@ -729,6 +740,16 @@ GO
 -- catalogos.Mesa.area_id -> catalogos.Area.id_area
 ALTER TABLE [catalogos].[Mesa]
   ADD CONSTRAINT FK_Mesa_Area FOREIGN KEY ([area_id]) REFERENCES [catalogos].[Area]([id_area]);
+GO
+
+-- catalogos.MesaEstatus.mesa_id -> catalogos.Mesa.id_mesa
+ALTER TABLE [catalogos].[MesaEstatus]
+  ADD CONSTRAINT FK_MesaEstatus_Mesa FOREIGN KEY ([mesa_id]) REFERENCES [catalogos].[Mesa]([id_mesa]);
+GO
+
+-- catalogos.MesaEstatus.cambio_por -> seguridad.Usuario.id_usuario
+ALTER TABLE [catalogos].[MesaEstatus]
+  ADD CONSTRAINT FK_MesaEstatus_UsuarioCambio FOREIGN KEY ([cambio_por]) REFERENCES [seguridad].[Usuario]([id_usuario]);
 GO
 
 -- catalogos.Mesa.sucursal_id -> catalogos.Sucursal.id_sucursal

@@ -441,3 +441,235 @@ def listar_insumos_stock_bajo():
             'error': 'SERVER_ERROR',
             'message': str(e)
         }), 500
+
+
+# ============================================================================
+# POST /api/insumos/lotes-proximos-vencer - Lotes Próximos a Vencer
+# ============================================================================
+@bp.route('/lotes-proximos-vencer', methods=['POST'])
+@jwt_required()
+def obtener_lotes_proximos_a_vencer():
+    """
+    Obtener lotes próximos a vencer en una sucursal.
+    
+    Similar a stock-bajo pero filtra lotes que expiran dentro de N días.
+    Devuelve nivel de urgencia (Crítica <= 7 días, Alta <= 14 días, Media)
+    ---
+    tags:
+      - Insumos
+      - Inventario
+    parameters:
+      - in: body
+        name: body
+        required: true
+        schema:
+          type: object
+          required:
+            - sucursal_id
+          properties:
+            sucursal_id:
+              type: integer
+              example: 1
+              description: ID de la sucursal
+            dias_proximidad:
+              type: integer
+              example: 30
+              default: 30
+              description: Número de días para considerar como "próximo a vencer" (default 30)
+    responses:
+      200:
+        description: Lista de lotes próximos a vencer ordenados por fecha de caducidad
+        schema:
+          type: object
+          properties:
+            success:
+              type: boolean
+              example: true
+            data:
+              type: array
+              items:
+                type: object
+                properties:
+                  id_lote:
+                    type: integer
+                  lote:
+                    type: string
+                  lote_proveedor:
+                    type: string
+                  cantidad_disponible:
+                    type: number
+                  costo_total:
+                    type: number
+                    description: Costo total de la cantidad disponible
+                  fecha_caducidad:
+                    type: string
+                    format: date-time
+                    example: "2025-11-19 15:30:00"
+                  dias_para_vencer:
+                    type: integer
+                  urgencia:
+                    type: string
+                    enum: [Crítica, Alta, Media]
+                    description: "Crítica si <= 7 días, Alta si <= 14 días, sino Media"
+                  insumo_nombre:
+                    type: string
+                  unidad_clave:
+                    type: string
+            message:
+              type: string
+              example: "Se encontraron X lotes próximos a vencer"
+      400:
+        description: Falta sucursal_id
+      500:
+        description: Error en servidor
+    """
+    try:
+        data = request.get_json()
+        
+        # Validar que venga sucursal_id
+        sucursal_id = data.get('sucursal_id')
+        if not sucursal_id:
+            return jsonify({
+                'success': False,
+                'error': 'MISSING_SUCURSAL_ID',
+                'message': 'Debe proporcionar sucursal_id en el body'
+            }), 400
+        
+        dias_proximidad = data.get('dias_proximidad', 30)
+        
+        # Validar que dias_proximidad sea un número válido
+        if not isinstance(dias_proximidad, int) or dias_proximidad <= 0:
+            dias_proximidad = 30
+        
+        # Obtener lotes próximos a vencer
+        resultado = InsumoService.obtener_lotes_proximos_a_vencer(
+            sucursal_id=sucursal_id,
+            dias_proximidad=dias_proximidad
+        )
+        
+        if not resultado['success']:
+            return jsonify(resultado), 500
+        
+        return jsonify({
+            'success': True,
+            'sucursal_id': sucursal_id,
+            'dias_proximidad': dias_proximidad,
+            'cantidad': len(resultado['data']),
+            'data': resultado['data'],
+            'message': resultado['message']
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error en obtener_lotes_proximos_a_vencer: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': 'SERVER_ERROR',
+            'message': str(e)
+        }), 500
+
+
+# ============================================================================
+# POST /api/insumos/lotes-vencidos - Lotes Vencidos
+# ============================================================================
+@bp.route('/lotes-vencidos', methods=['POST'])
+@jwt_required()
+def obtener_lotes_vencidos():
+    """
+    Obtener lotes vencidos en una sucursal.
+    
+    Lista todos los lotes que ya pasaron su fecha de caducidad.
+    Útil para auditoría e identificación de pérdidas.
+    ---
+    tags:
+      - Insumos
+      - Inventario
+    parameters:
+      - in: body
+        name: body
+        required: true
+        schema:
+          type: object
+          required:
+            - sucursal_id
+          properties:
+            sucursal_id:
+              type: integer
+              example: 1
+              description: ID de la sucursal
+    responses:
+      200:
+        description: Lista de lotes vencidos ordenados por fecha de caducidad
+        schema:
+          type: object
+          properties:
+            success:
+              type: boolean
+              example: true
+            data:
+              type: array
+              items:
+                type: object
+                properties:
+                  id_lote:
+                    type: integer
+                  lote:
+                    type: string
+                  lote_proveedor:
+                    type: string
+                  cantidad_disponible:
+                    type: number
+                  costo_total_perdida:
+                    type: number
+                    description: Costo de la cantidad disponible vencida
+                  fecha_caducidad:
+                    type: string
+                    format: date-time
+                    example: "2025-11-19 15:30:00"
+                  dias_vencido:
+                    type: integer
+                    description: Número de días desde que venció
+                  insumo_nombre:
+                    type: string
+                  unidad_clave:
+                    type: string
+            message:
+              type: string
+              example: "Se encontraron X lotes vencidos"
+      400:
+        description: Falta sucursal_id
+      500:
+        description: Error en servidor
+    """
+    try:
+        data = request.get_json()
+        
+        # Validar que venga sucursal_id
+        sucursal_id = data.get('sucursal_id')
+        if not sucursal_id:
+            return jsonify({
+                'success': False,
+                'error': 'MISSING_SUCURSAL_ID',
+                'message': 'Debe proporcionar sucursal_id en el body'
+            }), 400
+        
+        # Obtener lotes vencidos
+        resultado = InsumoService.obtener_lotes_vencidos(sucursal_id=sucursal_id)
+        
+        if not resultado['success']:
+            return jsonify(resultado), 500
+        
+        return jsonify({
+            'success': True,
+            'sucursal_id': sucursal_id,
+            'cantidad': len(resultado['data']),
+            'data': resultado['data'],
+            'message': resultado['message']
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error en obtener_lotes_vencidos: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': 'SERVER_ERROR',
+            'message': str(e)
+        }), 500

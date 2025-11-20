@@ -481,6 +481,115 @@ def listar_reservas():
         return jsonify({"error": f"Error interno: {str(e)}"}), 500
 
 
+@reserva_bp.route('/mesero/<int:usuario_id>', methods=['GET'])
+@jwt_required()
+def listar_reservas_por_mesero(usuario_id):
+    """
+    Listar reservas asignadas a un mesero, ordenadas por estatus.
+    ---
+    tags:
+      - Reservas
+    summary: "Listar Reservas por Mesero"
+    description: Retorna todas las reservas asignadas a un mesero específico (a través de AsignacionMesa de la mesa). Las reservas se ordenan por estatus (de menor a mayor). Útil para que el mesero vea sus reservas pendientes.
+    parameters:
+      - in: path
+        name: usuario_id
+        type: integer
+        required: true
+        description: "ID del mesero (usuario). Ej: 5"
+    responses:
+      200:
+        description: "Lista de reservas del mesero obtenida exitosamente"
+        schema:
+          type: object
+          properties:
+            reservas:
+              type: array
+              items:
+                type: object
+                properties:
+                  id_reserva:
+                    type: integer
+                    example: 10
+                  cliente_id:
+                    type: integer
+                    example: 1
+                  inicio:
+                    type: string
+                    format: date-time
+                    example: "2025-11-19 19:00:00"
+                  fin_estimado:
+                    type: string
+                    format: date-time
+                    example: "2025-11-19 20:30:00"
+                  estatus:
+                    type: integer
+                    example: 1
+                    description: "1=Programada, 2=EnCurso, 3=Completada, 4=NoShow, 5=Cancelada"
+                  estatus_display:
+                    type: string
+                    example: "Programada"
+                  tolerancia_min:
+                    type: integer
+                    example: 15
+                  notas:
+                    type: string
+                    example: "Mesa cerca de la ventana"
+                  puede_iniciar:
+                    type: boolean
+                    example: true
+                  created_at:
+                    type: string
+                    format: date-time
+            total:
+              type: integer
+              example: 3
+              description: "Cantidad total de reservas del mesero"
+      404:
+        description: "Mesero no existe o no tiene reservas asignadas"
+        schema:
+          type: object
+          properties:
+            reservas:
+              type: array
+              example: []
+            total:
+              type: integer
+              example: 0
+      500:
+        description: "Error interno del servidor"
+        schema:
+          type: object
+          properties:
+            error:
+              type: string
+              example: "Error al listar reservas del mesero: ..."
+    x-code-samples:
+      - lang: curl
+        source: |
+          curl -X GET http://localhost:5000/api/reservas/mesero/5 \\
+            -H "Authorization: Bearer YOUR_JWT_TOKEN"
+    """
+    try:
+        # Usuario autenticado
+        current_user = get_jwt_identity()
+        
+        # Listar
+        result = ReservaService.listar_reservas_por_mesero(usuario_id)
+        
+        if not result['success']:
+            return jsonify({"error": result['error']}), 500
+        
+        return jsonify({
+            "reservas": result['data'],
+            "total": len(result['data'])
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error en listar_reservas_por_mesero: {str(e)}")
+        return jsonify({"error": f"Error interno: {str(e)}"}), 500
+
+
 @reserva_bp.route('/<int:reserva_id>/iniciar', methods=['POST'])
 @jwt_required()
 def iniciar_reserva(reserva_id):

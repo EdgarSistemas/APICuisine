@@ -96,8 +96,8 @@ class ReservaCreateSchema(Schema):
     """Schema para crear reserva"""
     cliente_id = fields.Int(required=False, allow_none=True)
     recepcionista_id = fields.Int(required=False, allow_none=True)
-    inicio = fields.DateTime(required=True)
-    fin_estimado = fields.DateTime(required=True)
+    inicio = fields.DateTime(required=True, format='%Y-%m-%d %H:%M:%S')
+    fin_estimado = fields.DateTime(required=True, format='%Y-%m-%d %H:%M:%S')
     tolerancia_min = fields.Int(required=False, allow_none=True)
     notas = fields.Str(required=False, allow_none=True)
     hold_id = fields.Int(required=False, allow_none=True)  # Si viene de un hold

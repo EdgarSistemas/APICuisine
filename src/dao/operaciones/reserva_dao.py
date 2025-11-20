@@ -33,11 +33,14 @@ class ReservaDAO:
         """
         Crear nueva reserva confirmada.
         
+        Las fechas (inicio, fin_estimado) llegan ya parseadas por Marshmallow
+        en formato correcto de México (naive datetime en hora de México).
+        
         Args:
             cliente_id: ID del cliente que reserva
             recepcionista_id: ID del recepcionista que confirma (desde PWA)
-            inicio: Fecha/hora inicio reserva
-            fin_estimado: Fecha/hora fin estimado
+            inicio: Fecha/hora inicio reserva (naive datetime en TZ_MEXICO)
+            fin_estimado: Fecha/hora fin estimado (naive datetime en TZ_MEXICO)
             tolerancia_min: Minutos de tolerancia para NoShow (NULL = usar config)
             notas: Notas adicionales
             hold_id: ID del hold si se origina desde hold
@@ -46,6 +49,7 @@ class ReservaDAO:
             Dict serializado de la reserva
         """
         schema = ReservaResponseSchema()
+        
         with get_db_session() as session:
             reserva = Reserva(
                 cliente_id=cliente_id,
@@ -97,8 +101,10 @@ class ReservaDAO:
         - fecha_desde: reservas donde inicio >= fecha_desde
         - fecha_hasta: reservas donde fin_estimado <= fecha_hasta
         
+        Para filtrar por sucursal_id, se hace JOIN con HoldMesa y Mesa
+        
         Args:
-            sucursal_id: Filtrar por sucursal
+            sucursal_id: Filtrar por sucursal (a través de hold_id -> mesa -> sucursal)
             cliente_id: Filtrar por cliente
             estatus: Filtrar por estatus
             fecha_desde: Filtrar desde fecha (aplica a 'inicio')
@@ -107,12 +113,22 @@ class ReservaDAO:
         Returns:
             Lista de dicts de reservas
         """
+        from src.models.operaciones.hold_mesa_model import HoldMesa
+        from src.models.catalogos.mesa_model import Mesa
+        
         schema = ReservaResponseSchema()
         with get_db_session() as session:
             query = session.query(Reserva)
             
+            # Si busca por sucursal, hacer JOIN con HoldMesa y Mesa
             if sucursal_id:
-                query = query.filter(Reserva.sucursal_id == sucursal_id)
+                query = query.join(
+                    HoldMesa, Reserva.hold_id == HoldMesa.id_hold_mesa
+                ).join(
+                    Mesa, HoldMesa.mesa_id == Mesa.id_mesa
+                ).filter(
+                    Mesa.sucursal_id == sucursal_id
+                )
             
             if cliente_id:
                 query = query.filter(Reserva.cliente_id == cliente_id)
@@ -132,7 +148,37 @@ class ReservaDAO:
     
     
     @staticmethod
-    def actualizar_estatus_reserva(reserva_id: int, estatus: int, notas: str = None) -> dict:
+    def listar_reservas_por_mesero(usuario_id: int) -> list:
+        """
+        Listar reservas asignadas a un mesero (a través de AsignacionMesa).
+        Ordenadas por estatus (de menor a mayor).
+        
+        Args:
+            usuario_id: ID del mesero (usuario)
+            
+        Returns:
+            Lista de dicts de reservas ordenadas por estatus
+        """
+        from src.models.operaciones.asignacion_mesa_model import AsignacionMesa
+        from src.models.operaciones.hold_mesa_model import HoldMesa
+        from src.models.catalogos.mesa_model import Mesa
+        
+        schema = ReservaResponseSchema()
+        with get_db_session() as session:
+            # JOIN Reserva -> HoldMesa -> Mesa -> AsignacionMesa (usuario_id)
+            query = session.query(Reserva).join(
+                HoldMesa, Reserva.hold_id == HoldMesa.id_hold_mesa
+            ).join(
+                Mesa, HoldMesa.mesa_id == Mesa.id_mesa
+            ).join(
+                AsignacionMesa, Mesa.id_mesa == AsignacionMesa.mesa_id
+            ).filter(
+                AsignacionMesa.usuario_id == usuario_id,
+                AsignacionMesa.es_activa == True  # Solo asignaciones activas
+            ).order_by(Reserva.estatus.asc())
+            
+            reservas = query.all()
+            return [schema.dump(r) for r in reservas]
         """
         Actualizar estatus de reserva.
         
@@ -212,16 +258,54 @@ class ReservaDAO:
         Completar reserva (estatus=3 - Completada).
         Cliente terminó y se fue.
         
+        ACCIÓN ADICIONAL:
+        - Marca la mesa asociada a la reserva como "En Limpieza" (estatus=3)
+        
         Args:
             reserva_id: ID de la reserva
             
         Returns:
             Dict actualizado o None
         """
+        from src.dao.catalogos.mesa_estatus_dao import MesaEstatusDAO
+        from src.models.operaciones.hold_mesa_model import HoldMesa
+        from src.models.catalogos.mesa_model import Mesa
+        
+        with get_db_session() as session:
+            # Obtener reserva y mesa asociada
+            reserva = session.query(Reserva).filter(
+                Reserva.id_reserva == reserva_id
+            ).first()
+            
+            if not reserva or not reserva.hold_id:
+                # No tiene hold asociado, solo actualizar estatus
+                return ReservaDAO.actualizar_estatus_reserva(
+                    reserva_id,
+                    3,
+                    "Reserva completada"
+                )
+            
+            # Obtener mesa del hold
+            hold = session.query(HoldMesa).filter(
+                HoldMesa.id_hold_mesa == reserva.hold_id
+            ).first()
+            
+            if hold:
+                mesa_id = hold.mesa_id
+                # Marcar mesa como "En Limpieza"
+                MesaEstatusDAO.actualizar_estatus_mesa(
+                    mesa_id,
+                    3,  # En Limpieza
+                    None,
+                    f"Mesa en limpieza después de completar reserva {reserva_id}"
+                )
+                logger.info(f"Mesa {mesa_id} marcada en limpieza después de completar reserva {reserva_id}")
+        
+        # Actualizar estatus de reserva a completada
         return ReservaDAO.actualizar_estatus_reserva(
             reserva_id,
             3,  # Completada
-            "Reserva completada"
+            "Reserva completada - Mesa en limpieza"
         )
     
     

@@ -5,6 +5,7 @@ InsumoService - Business Logic para Insumos
 from src.dao.inventario.insumo_dao import InsumoDAO
 from src.dao.inventario.unidad_medida_dao import UnidadMedidaDAO
 from src.dao.inventario.existencia_dao import ExistenciaDAO
+from src.dao.inventario.lote_dao import LoteDAO
 from src.core.utils.multitenant import es_admin
 import logging
 
@@ -185,3 +186,93 @@ class InsumoService:
         except Exception as e:
             logger.error(f"Error en InsumoService.actualizar_insumo: {str(e)}")
             return {"success": False, "error": f"Error al actualizar insumo: {str(e)}"}
+
+    
+    @staticmethod
+    def obtener_lotes_proximos_a_vencer(sucursal_id: int, dias_proximidad: int = 30) -> dict:
+        """
+        Obtener lotes próximos a vencer por sucursal.
+        
+        Filtra lotes que vencen dentro de N días (default 30).
+        
+        Args:
+            sucursal_id: ID de la sucursal
+            dias_proximidad: Cantidad de días para considerar como "próximo a vencer" (default: 30)
+            
+        Returns:
+            {
+                success: bool, 
+                data?: [
+                    {
+                        id_lote: int,
+                        lote: str,
+                        lote_proveedor: str,
+                        cantidad_disponible: float,
+                        costo_total: float,
+                        fecha_caducidad: str (YYYY-MM-DD HH:MM:SS),
+                        dias_para_vencer: int,
+                        urgencia: str (Crítica|Alta|Media),
+                        insumo_nombre: str,
+                        unidad_clave: str
+                    }
+                ],
+                error?: str,
+                message?: str
+            }
+        """
+        try:
+            lotes = LoteDAO.obtener_lotes_proximos_a_vencer(sucursal_id, dias_proximidad)
+            
+            logger.info(f"Se obtuvieron {len(lotes)} lotes próximos a vencer en sucursal {sucursal_id}")
+            return {
+                "success": True,
+                "data": lotes,
+                "message": f"Se encontraron {len(lotes)} lotes próximos a vencer"
+            }
+            
+        except Exception as e:
+            logger.error(f"Error en InsumoService.obtener_lotes_proximos_a_vencer: {str(e)}")
+            return {"success": False, "error": f"Error al obtener lotes próximos a vencer: {str(e)}"}
+    
+    
+    @staticmethod
+    def obtener_lotes_vencidos(sucursal_id: int) -> dict:
+        """
+        Obtener lotes vencidos por sucursal.
+        
+        Args:
+            sucursal_id: ID de la sucursal
+            
+        Returns:
+            {
+                success: bool,
+                data?: [
+                    {
+                        id_lote: int,
+                        lote: str,
+                        lote_proveedor: str,
+                        cantidad_disponible: float,
+                        costo_total_perdida: float,
+                        fecha_caducidad: str (YYYY-MM-DD HH:MM:SS),
+                        dias_vencido: int,
+                        insumo_nombre: str,
+                        unidad_clave: str
+                    }
+                ],
+                error?: str,
+                message?: str
+            }
+        """
+        try:
+            lotes = LoteDAO.obtener_lotes_vencidos(sucursal_id)
+            
+            logger.info(f"Se obtuvieron {len(lotes)} lotes vencidos en sucursal {sucursal_id}")
+            return {
+                "success": True,
+                "data": lotes,
+                "message": f"Se encontraron {len(lotes)} lotes vencidos"
+            }
+            
+        except Exception as e:
+            logger.error(f"Error en InsumoService.obtener_lotes_vencidos: {str(e)}")
+            return {"success": False, "error": f"Error al obtener lotes vencidos: {str(e)}"}

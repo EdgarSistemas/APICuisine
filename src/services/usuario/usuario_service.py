@@ -698,4 +698,43 @@ class UsuarioService:
             
         except Exception as e:
             logger.error(f"Error al buscar usuarios con término '{termino}': {str(e)}")
+            return []
+    
+    
+    def obtener_usuarios_por_rol_y_sucursal(self, rol_id: int, sucursal_id: int) -> Dict[str, Any]:
+        """
+        Obtener usuarios filtrados por rol y sucursal (ambos obligatorios).
+        
+        Args:
+            rol_id: ID del rol (obligatorio)
+            sucursal_id: ID de la sucursal (obligatorio)
+            
+        Returns:
+            {success: bool, data?: list, error?: str}
+        """
+        try:
+            # Validar que ambos parámetros sean provided
+            if not rol_id or not sucursal_id:
+                return {
+                    "success": False,
+                    "error": "Los parámetros 'rol_id' y 'sucursal_id' son obligatorios"
+                }
+            
+            # Obtener usuarios
+            from src.dao.seguridad.usuario_dao import UsuarioDAO as UsuarioDaoSeguridad
+            usuarios = UsuarioDaoSeguridad.obtener_usuarios_por_rol_y_sucursal(rol_id, sucursal_id)
+            
+            logger.info(f"Se obtuvieron {len(usuarios)} usuarios con rol_id={rol_id} y sucursal_id={sucursal_id}")
+            
+            return {
+                "success": True,
+                "data": usuarios
+            }
+            
+        except Exception as e:
+            logger.error(f"Error al obtener usuarios por rol y sucursal: {str(e)}")
+            return {
+                "success": False,
+                "error": f"Error al obtener usuarios: {str(e)}"
+            }
             raise
