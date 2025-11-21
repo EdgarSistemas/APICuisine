@@ -146,8 +146,6 @@ class RecepcionService:
         try:
             recepciones = RecepcionDAO.listar_recepciones(sucursal_id)
             return {"success": True, "data": recepciones}
-            
-            
         except Exception as e:
             logger.error(f"Error en RecepcionService.listar_recepciones: {str(e)}")
             return {"success": False, "error": f"Error al listar recepciones: {str(e)}"}

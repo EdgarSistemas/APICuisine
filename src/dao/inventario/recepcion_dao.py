@@ -4,7 +4,7 @@ RecepcionDAO y RecepcionDetalleDAO - Data Access Objects
 
 from decimal import Decimal
 from datetime import datetime
-from src.models import Recepcion, RecepcionDetalle, Lote, Insumo, Compra, Movimiento, Existencia
+from src.models import Recepcion, RecepcionDetalle, Lote, Insumo, Compra, Movimiento, Existencia, Usuario
 from src.core.db.session_manager import get_db_session
 from src.schemas.recepcion_schema import RecepcionResponseSchema, RecepcionDetalleResponseSchema, RecepcionDetailedSchema
 import logging
@@ -64,10 +64,15 @@ class RecepcionDAO:
             if not recepcion:
                 return None
             
+            usuario = session.query(Usuario).filter(
+                Usuario.id_usuario == recepcion.recibido_por
+            ).first()
+            
             resultado = {
                 "id_recepcion": recepcion.id_recepcion,
                 "compra_id": recepcion.compra_id,
                 "recibido_por": recepcion.recibido_por,
+                "usuario_recibe": usuario.nombre + ' ' + usuario.apellido,
                 "fecha_recepcion": recepcion.fecha_recepcion.strftime('%Y-%m-%d %H:%M:%S') if recepcion.fecha_recepcion else None,
                 "notas": recepcion.notas,
                 "estatus": recepcion.estatus,
@@ -99,12 +104,32 @@ class RecepcionDAO:
     
     @staticmethod
     def listar_recepciones(sucursal_id: int = None) -> list:
-        """Listar recepciones"""
-        schema = RecepcionResponseSchema(many=True)
+        """Listar recepciones con información del usuario que recibió"""
         with get_db_session() as session:
-            query = session.query(Recepcion)
-            recepciones = query.all()
-            return schema.dump(recepciones)
+            recepciones = session.query(Recepcion).all()
+            
+            resultado = []
+            for recepcion in recepciones:
+                # Obtener usuario que recibió
+                usuario = session.query(Usuario).filter(
+                    Usuario.id_usuario == recepcion.recibido_por
+                ).first()
+                
+                usuario_nombre = f"{usuario.nombre} {usuario.apellido}" if usuario else "Desconocido"
+                
+                recepcion_dict = {
+                    "id_recepcion": recepcion.id_recepcion,
+                    "compra_id": recepcion.compra_id,
+                    "recibido_por": recepcion.recibido_por,
+                    "usuario_recibe": usuario_nombre,
+                    "fecha_recepcion": recepcion.fecha_recepcion.strftime('%Y-%m-%d %H:%M:%S') if recepcion.fecha_recepcion else None,
+                    "notas": recepcion.notas,
+                    "estatus": recepcion.estatus,
+                    "created_at": recepcion.created_at.strftime('%Y-%m-%d %H:%M:%S') if recepcion.created_at else None
+                }
+                resultado.append(recepcion_dict)
+            
+            return resultado
     
     
     @staticmethod
