@@ -591,7 +591,7 @@ def listar_reservas_por_mesero(usuario_id):
 
 
 
-@reserva_bp.route('/<int:reserva_id>', methods=['GET'])
+@reserva_bp.route('/<int:reserva_id>/iniciar', methods=['POST'])
 @jwt_required()
 def iniciar_reserva(reserva_id):
     """

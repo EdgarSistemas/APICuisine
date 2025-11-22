@@ -66,7 +66,6 @@ class ReservaDAO:
             logger.info(f"Reserva creada: ID {reserva.id_reserva} para cliente {cliente_id}, inicio {inicio}")
             return schema.dump(reserva)
     
-    
     @staticmethod
     def obtener_reserva_por_id(reserva_id: int) -> dict:
         """
@@ -84,8 +83,7 @@ class ReservaDAO:
                 Reserva.id_reserva == reserva_id
             ).first()
             return schema.dump(reserva) if reserva else None
-    
-    
+       
     @staticmethod
     def listar_reservas(
         sucursal_id: int = None,
@@ -146,7 +144,6 @@ class ReservaDAO:
             reservas = query.order_by(Reserva.inicio.asc()).all()
             return [schema.dump(r) for r in reservas]
     
-    
     @staticmethod
     def listar_reservas_por_mesero(usuario_id: int) -> list:
         """
@@ -179,6 +176,9 @@ class ReservaDAO:
             
             reservas = query.all()
             return [schema.dump(r) for r in reservas]
+    
+    @staticmethod
+    def actualizar_estatus_reserva(reserva_id: int, estatus: int, notas: str = None) -> dict:
         """
         Actualizar estatus de reserva.
         
@@ -213,7 +213,6 @@ class ReservaDAO:
             logger.info(f"Reserva {reserva_id} actualizada a estatus {estatus}")
             return schema.dump(reserva)
     
-    
     @staticmethod
     def cancelar_reserva(reserva_id: int, motivo: str = None) -> dict:
         """
@@ -231,51 +230,52 @@ class ReservaDAO:
             motivo: Motivo de cancelación
             
         Returns:
-            Dict con 'success', 'data' (reserva actualizada), o 'error'
+            Dict con reserva actualizada o None
         """
         from src.dao.catalogos.mesa_estatus_dao import MesaEstatusDAO
         from src.models.operaciones.hold_mesa_model import HoldMesa
         
-        try:
-            with get_db_session() as session:
-                # Obtener reserva
-                reserva = session.query(Reserva).filter(
-                    Reserva.id_reserva == reserva_id
+        schema = ReservaResponseSchema()
+        with get_db_session() as session:
+            # Obtener reserva
+            reserva = session.query(Reserva).filter(
+                Reserva.id_reserva == reserva_id
+            ).first()
+            
+            if not reserva:
+                return None
+            
+            # Si tiene hold, obtener la mesa y actualizarla a "Disponible"
+            if reserva.hold_id:
+                hold = session.query(HoldMesa).filter(
+                    HoldMesa.id_hold_mesa == reserva.hold_id
                 ).first()
                 
-                if not reserva:
-                    return {"success": False, "error": f"Reserva {reserva_id} no existe"}
-                
-                # Si tiene hold, obtener la mesa y actualizarla a "Disponible"
-                if reserva.hold_id:
-                    hold = session.query(HoldMesa).filter(
-                        HoldMesa.id_hold_mesa == reserva.hold_id
-                    ).first()
-                    
-                    if hold:
-                        mesa_id = hold.mesa_id
-                        # Cambiar mesa a "Disponible" (estatus=1)
-                        MesaEstatusDAO.actualizar_estatus_mesa(
-                            mesa_id,
-                            1,  # Disponible
-                            None,
-                            f"Mesa disponible - Reserva cancelada {reserva_id}: {motivo if motivo else 'Sin motivo'}"
-                        )
-                        logger.info(f"Mesa {mesa_id} marcada como disponible tras cancelar reserva {reserva_id}")
-                else:
-                    logger.warning(f"Reserva {reserva_id} cancelada pero sin hold asociado - mesa no actualizada")
+                if hold:
+                    mesa_id = hold.mesa_id
+                    # Cambiar mesa a "Disponible" (estatus=1)
+                    MesaEstatusDAO.actualizar_estatus_mesa(
+                        mesa_id,
+                        1,  # Disponible
+                        None,
+                        f"Mesa disponible - Reserva cancelada {reserva_id}: {motivo if motivo else 'Sin motivo'}"
+                    )
+                    logger.info(f"Mesa {mesa_id} marcada como disponible tras cancelar reserva {reserva_id}")
+            else:
+                logger.warning(f"Reserva {reserva_id} cancelada pero sin hold asociado - mesa no actualizada")
             
             # Actualizar estatus de reserva a cancelada
-            return ReservaDAO.actualizar_estatus_reserva(
-                reserva_id,
-                5,  # Cancelada
-                f"Cancelada: {motivo}" if motivo else "Cancelada"
-            )
-        
-        except Exception as e:
-            logger.error(f"Error en cancelar_reserva: {str(e)}")
-            return {"success": False, "error": f"Error al cancelar reserva: {str(e)}"}
-    
+            reserva.estatus = 5
+            reserva.updated_at = datetime.now()
+            if motivo:
+                if reserva.notas:
+                    reserva.notas += f" | Cancelada: {motivo}"
+                else:
+                    reserva.notas = f"Cancelada: {motivo}"
+            session.commit()
+            
+            logger.info(f"Reserva {reserva_id} cancelada - estatus cambiado a 5 (Cancelada)")
+            return schema.dump(reserva)
     
     @staticmethod
     def iniciar_reserva(reserva_id: int) -> dict:
@@ -294,53 +294,48 @@ class ReservaDAO:
             reserva_id: ID de la reserva
             
         Returns:
-            Dict con 'success', 'data' (reserva actualizada), o 'error'
+            Dict con reserva actualizada o None
         """
         from src.dao.catalogos.mesa_estatus_dao import MesaEstatusDAO
         from src.models.operaciones.hold_mesa_model import HoldMesa
         
-        try:
-            with get_db_session() as session:
-                # Obtener reserva
-                reserva = session.query(Reserva).filter(
-                    Reserva.id_reserva == reserva_id
+        schema = ReservaResponseSchema()
+        with get_db_session() as session:
+            # Obtener reserva
+            reserva = session.query(Reserva).filter(
+                Reserva.id_reserva == reserva_id
+            ).first()
+            
+            if not reserva:
+                return None
+            
+            # Si tiene hold, obtener la mesa y actualizarla a "Ocupada"
+            if reserva.hold_id:
+                hold = session.query(HoldMesa).filter(
+                    HoldMesa.id_hold_mesa == reserva.hold_id
                 ).first()
                 
-                if not reserva:
-                    return {"success": False, "error": f"Reserva {reserva_id} no existe"}
-                
-                # Si tiene hold, obtener la mesa y actualizarla a "Ocupada"
-                if reserva.hold_id:
-                    hold = session.query(HoldMesa).filter(
-                        HoldMesa.id_hold_mesa == reserva.hold_id
-                    ).first()
-                    
-                    if hold:
-                        mesa_id = hold.mesa_id
-                        # Cambiar mesa a "Ocupada" (estatus=2)
-                        MesaEstatusDAO.actualizar_estatus_mesa(
-                            mesa_id,
-                            2,  # Ocupada
-                            None,
-                            f"Mesa ocupada - Reserva iniciada {reserva_id}"
-                        )
-                        logger.info(f"Mesa {mesa_id} marcada como ocupada para reserva {reserva_id}")
-                else:
-                    logger.warning(f"Reserva {reserva_id} iniciada pero sin hold asociado - mesa no actualizada")
+                if hold:
+                    mesa_id = hold.mesa_id
+                    # Cambiar mesa a "Ocupada" (estatus=2)
+                    MesaEstatusDAO.actualizar_estatus_mesa(
+                        mesa_id,
+                        2,  # Ocupada
+                        None,
+                        f"Mesa ocupada - Reserva iniciada {reserva_id}"
+                    )
+                    logger.info(f"Mesa {mesa_id} marcada como ocupada para reserva {reserva_id}")
+            else:
+                logger.warning(f"Reserva {reserva_id} iniciada pero sin hold asociado - mesa no actualizada")
             
             # Actualizar estatus de reserva a en curso
-            return ReservaDAO.actualizar_estatus_reserva(
-                reserva_id,
-                2,  # EnCurso
-                "Cliente llegó - Reserva iniciada - Mesa ocupada"
-            )
-        
-        except Exception as e:
-            logger.error(f"Error en iniciar_reserva: {str(e)}")
-            return {"success": False, "error": f"Error al iniciar reserva: {str(e)}"}
+            reserva.estatus = 2
+            reserva.updated_at = datetime.now()
+            session.commit()
+            
+            logger.info(f"Reserva {reserva_id} iniciada - estatus cambiado a 2 (EnCurso)")
+            return schema.dump(reserva)
 
-    
-    
     @staticmethod
     def completar_reserva(reserva_id: int) -> dict:
         """
@@ -359,53 +354,48 @@ class ReservaDAO:
             reserva_id: ID de la reserva
             
         Returns:
-            Dict con 'success', 'data' (reserva actualizada), o 'error'
+            Dict con reserva actualizada o None
         """
         from src.dao.catalogos.mesa_estatus_dao import MesaEstatusDAO
         from src.models.operaciones.hold_mesa_model import HoldMesa
         
-        try:
-            with get_db_session() as session:
-                # Obtener reserva
-                reserva = session.query(Reserva).filter(
-                    Reserva.id_reserva == reserva_id
+        schema = ReservaResponseSchema()
+        with get_db_session() as session:
+            # Obtener reserva
+            reserva = session.query(Reserva).filter(
+                Reserva.id_reserva == reserva_id
+            ).first()
+            
+            if not reserva:
+                return None
+            
+            # Si tiene hold, obtener la mesa y actualizarla a "En Limpieza"
+            if reserva.hold_id:
+                hold = session.query(HoldMesa).filter(
+                    HoldMesa.id_hold_mesa == reserva.hold_id
                 ).first()
                 
-                if not reserva:
-                    return {"success": False, "error": f"Reserva {reserva_id} no existe"}
-                
-                # Si tiene hold, obtener la mesa y actualizarla a "En Limpieza"
-                if reserva.hold_id:
-                    hold = session.query(HoldMesa).filter(
-                        HoldMesa.id_hold_mesa == reserva.hold_id
-                    ).first()
-                    
-                    if hold:
-                        mesa_id = hold.mesa_id
-                        # Cambiar mesa a "En Limpieza" (estatus=3)
-                        MesaEstatusDAO.actualizar_estatus_mesa(
-                            mesa_id,
-                            3,  # En Limpieza
-                            None,
-                            f"Mesa en limpieza después de completar reserva {reserva_id}"
-                        )
-                        logger.info(f"Mesa {mesa_id} marcada en limpieza después de completar reserva {reserva_id}")
-                else:
-                    logger.warning(f"Reserva {reserva_id} completada pero sin hold asociado - mesa no actualizada")
+                if hold:
+                    mesa_id = hold.mesa_id
+                    # Cambiar mesa a "En Limpieza" (estatus=3)
+                    MesaEstatusDAO.actualizar_estatus_mesa(
+                        mesa_id,
+                        3,  # En Limpieza
+                        None,
+                        f"Mesa en limpieza después de completar reserva {reserva_id}"
+                    )
+                    logger.info(f"Mesa {mesa_id} marcada en limpieza después de completar reserva {reserva_id}")
+            else:
+                logger.warning(f"Reserva {reserva_id} completada pero sin hold asociado - mesa no actualizada")
             
             # Actualizar estatus de reserva a completada
-            return ReservaDAO.actualizar_estatus_reserva(
-                reserva_id,
-                3,  # Completada
-                "Reserva completada - Mesa en limpieza"
-            )
-        
-        except Exception as e:
-            logger.error(f"Error en completar_reserva: {str(e)}")
-            return {"success": False, "error": f"Error al completar reserva: {str(e)}"}
-
-    
-    
+            reserva.estatus = 3
+            reserva.updated_at = datetime.now()
+            session.commit()
+            
+            logger.info(f"Reserva {reserva_id} completada - estatus cambiado a 3 (Completada)")
+            return schema.dump(reserva)
+  
     @staticmethod
     def marcar_no_show(reserva_id: int) -> dict:
         """
@@ -423,51 +413,51 @@ class ReservaDAO:
             reserva_id: ID de la reserva
             
         Returns:
-            Dict con 'success', 'data' (reserva actualizada), o 'error'
+            Dict con reserva actualizada o None
         """
         from src.dao.catalogos.mesa_estatus_dao import MesaEstatusDAO
         from src.models.operaciones.hold_mesa_model import HoldMesa
         
-        try:
-            with get_db_session() as session:
-                # Obtener reserva
-                reserva = session.query(Reserva).filter(
-                    Reserva.id_reserva == reserva_id
+        schema = ReservaResponseSchema()
+        with get_db_session() as session:
+            # Obtener reserva
+            reserva = session.query(Reserva).filter(
+                Reserva.id_reserva == reserva_id
+            ).first()
+            
+            if not reserva:
+                return None
+            
+            # Si tiene hold, obtener la mesa y actualizarla a "Disponible"
+            if reserva.hold_id:
+                hold = session.query(HoldMesa).filter(
+                    HoldMesa.id_hold_mesa == reserva.hold_id
                 ).first()
                 
-                if not reserva:
-                    return {"success": False, "error": f"Reserva {reserva_id} no existe"}
-                
-                # Si tiene hold, obtener la mesa y actualizarla a "Disponible"
-                if reserva.hold_id:
-                    hold = session.query(HoldMesa).filter(
-                        HoldMesa.id_hold_mesa == reserva.hold_id
-                    ).first()
-                    
-                    if hold:
-                        mesa_id = hold.mesa_id
-                        # Cambiar mesa a "Disponible" (estatus=1)
-                        MesaEstatusDAO.actualizar_estatus_mesa(
-                            mesa_id,
-                            1,  # Disponible
-                            None,
-                            f"Mesa disponible - Reserva NoShow {reserva_id}"
-                        )
-                        logger.info(f"Mesa {mesa_id} marcada como disponible tras NoShow en reserva {reserva_id}")
-                else:
-                    logger.warning(f"Reserva {reserva_id} marcada NoShow pero sin hold asociado - mesa no actualizada")
+                if hold:
+                    mesa_id = hold.mesa_id
+                    # Cambiar mesa a "Disponible" (estatus=1)
+                    MesaEstatusDAO.actualizar_estatus_mesa(
+                        mesa_id,
+                        1,  # Disponible
+                        None,
+                        f"Mesa disponible - Reserva NoShow {reserva_id}"
+                    )
+                    logger.info(f"Mesa {mesa_id} marcada como disponible tras NoShow en reserva {reserva_id}")
+            else:
+                logger.warning(f"Reserva {reserva_id} marcada NoShow pero sin hold asociado - mesa no actualizada")
             
             # Actualizar estatus de reserva a no show
-            return ReservaDAO.actualizar_estatus_reserva(
-                reserva_id,
-                4,  # NoShow
-                "Cliente no se presentó"
-            )
-        
-        except Exception as e:
-            logger.error(f"Error en marcar_no_show: {str(e)}")
-            return {"success": False, "error": f"Error al marcar NoShow: {str(e)}"}
-    
+            reserva.estatus = 4
+            reserva.updated_at = datetime.now()
+            if reserva.notas:
+                reserva.notas += " | Cliente no se presentó"
+            else:
+                reserva.notas = "Cliente no se presentó"
+            session.commit()
+            
+            logger.info(f"Reserva {reserva_id} marcada NoShow - estatus cambiado a 4")
+            return schema.dump(reserva)
     
     @staticmethod
     def reserva_existe(reserva_id: int) -> bool:
@@ -485,7 +475,6 @@ class ReservaDAO:
                 Reserva.id_reserva == reserva_id
             ).first()
             return existe is not None
-    
     
     @staticmethod
     def verificar_no_shows() -> int:

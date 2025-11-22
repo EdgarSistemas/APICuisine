@@ -8,7 +8,7 @@ from marshmallow import Schema, fields, validate, validates, ValidationError
 class TicketCreateSchema(Schema):
     """Schema para crear ticket"""
     notas = fields.Str(required=True, validate=validate.Length(min=1, max=500))
-    imagen_url = fields.Str(required=False, allow_none=True, validate=validate.Length(max=500))
+    imagen_url = fields.Str(required=False, allow_none=True)
 
 
 class TicketUpdateEstatusSchema(Schema):

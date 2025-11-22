@@ -78,13 +78,7 @@ class ReservaService:
                 
                 if ahora_mexico > expires_at:
                     return {"success": False, "error": f"Hold {hold_id} ya expiró"}
-                
-                # Hold validado - usar fechas del payload (ya parseadas correctamente por Marshmallow)
-                # NO sobrescribir con fechas del hold, usar las que envió el cliente
-                
             else:
-                # Validación manual (sin hold)
-                # Por ahora permitimos, pero idealmente siempre debe venir de hold
                 logger.warning(f"Reserva creada sin hold previo por usuario {usuario_id}")
             
             # Crear reserva

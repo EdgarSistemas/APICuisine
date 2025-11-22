@@ -63,8 +63,6 @@ def crear_recepcion():
                   costo_unitario:
                     type: number
                     example: 25.50
-                  lote_numero:
-                    type: string
                   lote_proveedor:
                     type: string
                   fecha_caducidad:
