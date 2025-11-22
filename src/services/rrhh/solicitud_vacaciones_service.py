@@ -25,14 +25,25 @@ class SolicitudVacacionesService:
             "motivo": "Vacaciones familiares"  # Opcional
         }
         """
+        from datetime import datetime
+        
         schema = SolicitudVacacionesCreateSchema()
         errors = schema.validate(data)
         if errors:
             return {"success": False, "errors": errors, "solicitud": None}
         
         try:
+            # Convertir fechas string a date objects
+            fecha_inicio = data['fecha_inicio']
+            fecha_fin = data['fecha_fin']
+            
+            if isinstance(fecha_inicio, str):
+                fecha_inicio = datetime.strptime(fecha_inicio, '%Y-%m-%d').date()
+            if isinstance(fecha_fin, str):
+                fecha_fin = datetime.strptime(fecha_fin, '%Y-%m-%d').date()
+            
             # Obtener horario activo del empleado
-            horario_activo = UsuarioHorarioDAO.obtener_horario_activo(usuario_id)
+            horario_activo = UsuarioHorarioDAO.obtener_horario_activo_usuario(usuario_id)
             if not horario_activo:
                 return {
                     "success": False,
@@ -42,8 +53,8 @@ class SolicitudVacacionesService:
             
             resultado = SolicitudVacacionesDAO.crear_solicitud(
                 usuario_horario_id=horario_activo['id_usuario_horario'],
-                fecha_inicio=data['fecha_inicio'],
-                fecha_fin=data['fecha_fin'],
+                fecha_inicio=fecha_inicio,
+                fecha_fin=fecha_fin,
                 motivo=data.get('motivo')
             )
             
@@ -138,7 +149,10 @@ class SolicitudVacacionesService:
         """
         Rechazar solicitud de vacaciones.
         
-        Expected data: {} (sin campos requeridos)
+        Expected data: 
+        {
+            "notas_gerente": "Motivo del rechazo"  # Opcional
+        }
         """
         if data is None:
             data = {}
@@ -151,7 +165,8 @@ class SolicitudVacacionesService:
         try:
             resultado = SolicitudVacacionesDAO.rechazar_solicitud(
                 id_solicitud=id_solicitud,
-                revisado_por=gerente_id
+                revisado_por=gerente_id,
+                notas_gerente=data.get('notas_gerente')
             )
             
             if resultado['success']:

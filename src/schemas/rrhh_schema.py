@@ -175,11 +175,11 @@ class SolicitudVacacionesResponseSchema(Schema):
     """Schema para respuesta de solicitud"""
     id_solicitud = fields.Int()
     horario_usuario_id = fields.Int()
-    fecha_inicio = fields.Date(allow_none=True)
-    fecha_fin = fields.Date(allow_none=True)
+    fecha_inicio = fields.Date()
+    fecha_fin = fields.Date()
     motivo = fields.Str(allow_none=True)
-    estatus = fields.Int()  # 1=Registrada, 2=Aprobada, 3=Rechazada
-    created_at = fields.DateTime(allow_none=True, format='%Y-%m-%d %H:%M:%S')
+    estatus = fields.Int()  # 1=Pendiente, 2=Aprobada, 3=Rechazada
+    created_at = fields.DateTime(format='%Y-%m-%d %H:%M:%S')
     
     class Meta:
         ordered = True

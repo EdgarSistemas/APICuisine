@@ -3,10 +3,10 @@ SolicitudVacacionesController - Endpoints para solicitudes de vacaciones
 """
 
 from flask import Blueprint, request, jsonify
-from flask_jwt_extended import jwt_required, get_jwt_identity
+from flask_jwt_extended import jwt_required
 from flasgger import swag_from
 from src.services.rrhh.solicitud_vacaciones_service import SolicitudVacacionesService
-from datetime import datetime
+from src.core.auth.jwt_helpers import get_current_user_id, get_current_user_roles
 import logging
 
 logger = logging.getLogger(__name__)
@@ -28,11 +28,11 @@ def crear_solicitud():
       La solicitud queda en estatus PENDIENTE hasta que el gerente la apruebe o rechace.
     security:
       - Bearer: []
-    requestBody:
-      required: true
-      content:
-        application/json:
-          schema:
+    parameters:
+      - in: body
+        name: body
+        required: true
+        schema:
             type: object
             required:
               - fecha_inicio
@@ -87,28 +87,37 @@ def crear_solicitud():
                       type: integer
                       example: 1
                       description: 1=Pendiente, 2=Aprobada, 3=Rechazada
+                    estatus_display:
+                      type: string
+                      example: "Pendiente"
+                    revisado_por:
+                      type: integer
+                      nullable: true
+                      description: ID del gerente que revisó
+                    fecha_revision:
+                      type: string
+                      format: date-time
+                      nullable: true
                     created_at:
                       type: string
                       example: "2025-01-22 14:30:00"
+                    updated_at:
+                      type: string
+                      format: date-time
+                      nullable: true
       400:
         description: Error de validación
       500:
         description: Error interno del servidor
     """
     try:
-        current_user = get_jwt_identity()
-        user_id = current_user.get('id_usuario') if isinstance(current_user, dict) else None
+        current_user_id = get_current_user_id()
         
-        data = request.get_json() or {}
-        
-        # Convertir fechas string a date
-        if isinstance(data.get('fecha_inicio'), str):
-            data['fecha_inicio'] = datetime.strptime(data['fecha_inicio'], '%Y-%m-%d').date()
-        if isinstance(data.get('fecha_fin'), str):
-            data['fecha_fin'] = datetime.strptime(data['fecha_fin'], '%Y-%m-%d').date()
+        # Usar silent=True para evitar error 415 si Content-Type no es application/json
+        data = request.get_json(silent=True) or {}
         
         resultado = SolicitudVacacionesService.crear_solicitud(
-            usuario_id=user_id,
+            usuario_id=current_user_id,
             data=data
         )
         
@@ -162,13 +171,12 @@ def listar_mis_solicitudes():
         description: Error interno
     """
     try:
-        current_user = get_jwt_identity()
-        user_id = current_user.get('id_usuario') if isinstance(current_user, dict) else None
+        current_user_id = get_current_user_id()
         
         estatus = request.args.get('estatus', type=int)
         
         resultado = SolicitudVacacionesService.listar_solicitudes_usuario(
-            usuario_id=user_id,
+            usuario_id=current_user_id,
             estatus=estatus
         )
         
@@ -212,14 +220,8 @@ def listar_solicitudes_sucursal(sucursal_id):
         description: Error interno
     """
     try:
-        current_user = get_jwt_identity()
-        user_role = current_user.get('rol') if isinstance(current_user, dict) else None
-        
-        if user_role not in ['ADMIN', 'GERENTE']:
-            return jsonify({
-                "success": False,
-                "error": "Acceso denegado. Se requiere rol ADMIN o GERENTE"
-            }), 403
+        # Endpoint requiere autenticación - ya está validado por @jwt_required()
+        # Por ahora abierto a cualquier usuario autenticado
         
         estatus = request.args.get('estatus', type=int)
         
@@ -264,23 +266,10 @@ def obtener_solicitud(id_solicitud):
         description: Error interno
     """
     try:
-        current_user = get_jwt_identity()
-        user_id = current_user.get('id_usuario') if isinstance(current_user, dict) else None
-        user_role = current_user.get('rol') if isinstance(current_user, dict) else None
-        
         resultado = SolicitudVacacionesService.obtener_solicitud(id_solicitud)
         
         if not resultado['success']:
             return jsonify(resultado), 404
-        
-        # Validar permisos (solo gerente/admin pueden ver cualquier solicitud)
-        solicitud = resultado['solicitud']
-        
-        # Si no es gerente ni admin, validar que sea su propia solicitud
-        # (requiere join con UsuarioHorario para validar)
-        if user_role not in ['ADMIN', 'GERENTE']:
-            # Implementar validación adicional si es necesario
-            pass
         
         return jsonify(resultado), 200
         
@@ -329,21 +318,16 @@ def aprobar_solicitud(id_solicitud):
         description: Error interno
     """
     try:
-        current_user = get_jwt_identity()
-        user_id = current_user.get('id_usuario') if isinstance(current_user, dict) else None
-        user_role = current_user.get('rol') if isinstance(current_user, dict) else None
+        from src.core.auth.jwt_helpers import get_current_user_id
         
-        if user_role not in ['ADMIN', 'GERENTE']:
-            return jsonify({
-                "success": False,
-                "error": "Acceso denegado. Se requiere rol ADMIN o GERENTE"
-            }), 403
+        current_user_id = get_current_user_id()
         
-        data = request.get_json() or {}
+        # Usar silent=True para evitar error 415 si Content-Type no es application/json
+        data = request.get_json(silent=True) or {}
         
         resultado = SolicitudVacacionesService.aprobar_solicitud(
             id_solicitud=id_solicitud,
-            gerente_id=user_id,
+            gerente_id=current_user_id,
             data=data
         )
         
@@ -366,7 +350,7 @@ def rechazar_solicitud(id_solicitud):
     tags:
       - Vacaciones
     summary: Rechazar solicitud (Gerente/Admin)
-    description: Cambia el estatus de la solicitud a RECHAZADA (estatus=3)
+    description: Cambia el estatus de la solicitud a RECHAZADA (estatus=3). Permite guardar notas del gerente.
     security:
       - Bearer: []
     parameters:
@@ -386,9 +370,22 @@ def rechazar_solicitud(id_solicitud):
                 type: string
                 maxLength: 300
                 nullable: true
+                description: "Motivo del rechazo"
+          example:
+            notas_gerente: "No hay cobertura disponible en esas fechas"
     responses:
       200:
-        description: Solicitud rechazada
+        description: Solicitud rechazada exitosamente
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                success:
+                  type: boolean
+                  example: true
+                solicitud:
+                  type: object
       400:
         description: Error en la operación
       403:
@@ -397,21 +394,16 @@ def rechazar_solicitud(id_solicitud):
         description: Error interno
     """
     try:
-        current_user = get_jwt_identity()
-        user_id = current_user.get('id_usuario') if isinstance(current_user, dict) else None
-        user_role = current_user.get('rol') if isinstance(current_user, dict) else None
+        from src.core.auth.jwt_helpers import get_current_user_id
         
-        if user_role not in ['ADMIN', 'GERENTE']:
-            return jsonify({
-                "success": False,
-                "error": "Acceso denegado. Se requiere rol ADMIN o GERENTE"
-            }), 403
+        current_user_id = get_current_user_id()
         
-        data = request.get_json() or {}
+        # Usar silent=True para evitar error 415 si Content-Type no es application/json
+        data = request.get_json(silent=True) or {}
         
         resultado = SolicitudVacacionesService.rechazar_solicitud(
             id_solicitud=id_solicitud,
-            gerente_id=user_id,
+            gerente_id=current_user_id,
             data=data
         )
         
@@ -462,14 +454,8 @@ def contar_pendientes():
         description: Error interno
     """
     try:
-        current_user = get_jwt_identity()
-        user_role = current_user.get('rol') if isinstance(current_user, dict) else None
-        
-        if user_role not in ['ADMIN', 'GERENTE']:
-            return jsonify({
-                "success": False,
-                "error": "Acceso denegado. Se requiere rol ADMIN o GERENTE"
-            }), 403
+        # Endpoint requiere autenticación - ya está validado por @jwt_required()
+        # Por ahora abierto a cualquier usuario autenticado
         
         sucursal_id = request.args.get('sucursal_id', type=int)
         

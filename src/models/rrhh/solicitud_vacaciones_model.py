@@ -19,7 +19,7 @@ class SolicitudVacaciones(BaseModel):
     fecha_inicio = Column(Date, nullable=False)
     fecha_fin = Column(Date, nullable=False)
     motivo = Column(String(300), nullable=True)
-    estatus = Column(SmallInteger, nullable=False, default=1)  # 1=Registrada, 2=Aprobada, 3=Cancelada
+    estatus = Column(SmallInteger, nullable=False, default=1)  # 1=Pendiente, 2=Aprobada, 3=Rechazada
     created_at = Column(DateTime, nullable=False, default=func.getdate())
     
     # Relaciones

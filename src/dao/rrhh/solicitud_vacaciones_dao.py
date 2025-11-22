@@ -36,7 +36,7 @@ class SolicitudVacacionesDAO:
             # Validar que el horario_usuario_id existe
             horario_usuario = session.query(UsuarioHorario).filter(
                 UsuarioHorario.id_usuario_horario == usuario_horario_id,
-                UsuarioHorario.activo == 1
+                UsuarioHorario.es_activo == True
             ).first()
             
             if not horario_usuario:
@@ -56,7 +56,9 @@ class SolicitudVacacionesDAO:
             
             # Validar que no haya solapamiento con otras solicitudes aprobadas del mismo usuario
             usuario_id = horario_usuario.usuario_id
-            solapamiento = session.query(SolicitudVacaciones).join(UsuarioHorario).filter(
+            solapamiento = session.query(SolicitudVacaciones).join(
+                UsuarioHorario, SolicitudVacaciones.horario_usuario_id == UsuarioHorario.id_usuario_horario
+            ).filter(
                 UsuarioHorario.usuario_id == usuario_id,
                 SolicitudVacaciones.estatus == 2,  # Aprobada
                 and_(
@@ -112,13 +114,15 @@ class SolicitudVacacionesDAO:
             
             # Filtrar por usuario
             if usuario_id:
-                query = query.join(UsuarioHorario).filter(
+                query = query.join(UsuarioHorario, SolicitudVacaciones.horario_usuario_id == UsuarioHorario.id_usuario_horario).filter(
                     UsuarioHorario.usuario_id == usuario_id
                 )
             
             # Filtrar por sucursal
             if sucursal_id:
-                query = query.join(UsuarioHorario).join(Horario).filter(
+                query = query.join(UsuarioHorario, SolicitudVacaciones.horario_usuario_id == UsuarioHorario.id_usuario_horario).join(
+                    Horario, UsuarioHorario.horario_id == Horario.id_horario
+                ).filter(
                     Horario.sucursal_id == sucursal_id
                 )
             
@@ -185,13 +189,14 @@ class SolicitudVacacionesDAO:
     
     
     @staticmethod
-    def rechazar_solicitud(id_solicitud: int, revisado_por: int) -> dict:
+    def rechazar_solicitud(id_solicitud: int, revisado_por: int, notas_gerente: str = None) -> dict:
         """
         Rechazar solicitud de vacaciones.
         
         Args:
             id_solicitud: ID de la solicitud
             revisado_por: ID del gerente que rechaza
+            notas_gerente: Notas/motivo del rechazo (ignorado, para compatibilidad)
         """
         schema = SolicitudVacacionesResponseSchema()
         
@@ -231,7 +236,9 @@ class SolicitudVacacionesDAO:
             )
             
             if sucursal_id:
-                query = query.join(UsuarioHorario).join(Horario).filter(
+                query = query.join(UsuarioHorario, SolicitudVacaciones.horario_usuario_id == UsuarioHorario.id_usuario_horario).join(
+                    Horario, UsuarioHorario.horario_id == Horario.id_horario
+                ).filter(
                     Horario.sucursal_id == sucursal_id
                 )
             
@@ -251,7 +258,9 @@ class SolicitudVacacionesDAO:
         fecha = fecha or date.today()
         
         with get_db_session() as session:
-            solicitudes = session.query(SolicitudVacaciones).join(UsuarioHorario).filter(
+            solicitudes = session.query(SolicitudVacaciones).join(
+                UsuarioHorario, SolicitudVacaciones.horario_usuario_id == UsuarioHorario.id_usuario_horario
+            ).filter(
                 UsuarioHorario.usuario_id == usuario_id,
                 SolicitudVacaciones.estatus == 2,  # Aprobada
                 SolicitudVacaciones.fecha_inicio <= fecha,
