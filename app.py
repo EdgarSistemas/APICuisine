@@ -48,14 +48,14 @@ def create_app():
   config = get_config()
   app.config.from_object(config)
   
-  # CORS simple y permisivo para desarrollo
+  # CORS Configuration - Permitir localhost:5173 y cualquier otro origen
   CORS(app,
-        resources={r"/api/*": {
-          "origins": ["http://localhost:5173", "*"],
-          "allow_headers": "*",
-          "methods": "*"
-        }},
-        supports_credentials=False
+       origins="*",
+       allow_headers=["Content-Type", "Authorization", "X-Requested-With"],
+       methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+       supports_credentials=False,
+       max_age=3600,
+       send_wildcard=True
   )
   
   # Inicializar JWT Manager
@@ -101,18 +101,6 @@ def create_app():
   app.register_blueprint(mesa_estatus_bp)
   app.register_blueprint(jobs_bp)
   app.register_blueprint(push_notifications_bp)
-
-  # Manejo explícito de CORS para OPTIONS
-  @app.before_request
-  def handle_preflight():
-      from flask import request
-      if request.method == "OPTIONS":
-          from flask import make_response
-          response = make_response()
-          response.headers.add("Access-Control-Allow-Origin", "*")
-          response.headers.add("Access-Control-Allow-Headers", "Content-Type,Authorization")
-          response.headers.add("Access-Control-Allow-Methods", "GET,PUT,POST,DELETE,OPTIONS,PATCH")
-          return response
 
   @app.route('/health')
   def health_check():

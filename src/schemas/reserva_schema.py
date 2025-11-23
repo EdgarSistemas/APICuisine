@@ -178,8 +178,8 @@ class ReservaResponseSchema(Schema):
 
 class ReservaListarQuerySchema(Schema):
     """Schema para query params al listar reservas"""
-    sucursal_id = fields.Int(required=False, allow_none=True)
-    cliente_id = fields.Int(required=False, allow_none=True)
-    estatus = fields.Int(required=False, allow_none=True)
-    fecha_desde = fields.DateTime(required=False, allow_none=True, format='iso')
-    fecha_hasta = fields.DateTime(required=False, allow_none=True, format='iso')
+    sucursal_id = fields.Int(required=False, allow_none=True, missing=None)
+    cliente_id = fields.Int(required=False, allow_none=True, missing=None)
+    estatus = fields.Int(required=False, allow_none=True, missing=None)
+    fecha_desde = fields.DateTime(required=False, allow_none=True, format='iso', missing=None)
+    fecha_hasta = fields.DateTime(required=False, allow_none=True, format='iso', missing=None)
