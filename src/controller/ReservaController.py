@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 reserva_bp = Blueprint('reserva', __name__, url_prefix='/api/reservas')
 
 
-@reserva_bp.route('/', methods=['POST'])
+@reserva_bp.route('', methods=['POST'])
 @jwt_required()
 def crear_reserva():
     """
@@ -318,7 +318,7 @@ def obtener_reserva(reserva_id):
         return jsonify({"error": f"Error interno: {str(e)}"}), 500
 
 
-@reserva_bp.route('/', methods=['GET'])
+@reserva_bp.route('', methods=['GET'])
 @jwt_required()
 def listar_reservas():
     """
