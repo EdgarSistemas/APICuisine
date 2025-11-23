@@ -53,7 +53,7 @@ def create_app():
         origins="*",
         allow_headers="*",
         methods="*",
-        supports_credentials=True
+        supports_credentials=False
   )
   
   # Inicializar JWT Manager
@@ -108,8 +108,8 @@ def create_app():
           from flask import make_response
           response = make_response()
           response.headers.add("Access-Control-Allow-Origin", "*")
-          response.headers.add('Access-Control-Allow-Headers', "*")
-          response.headers.add('Access-Control-Allow-Methods', "*")
+          response.headers.add("Access-Control-Allow-Headers", "Content-Type,Authorization")
+          response.headers.add("Access-Control-Allow-Methods", "GET,PUT,POST,DELETE,OPTIONS,PATCH")
           return response
 
   @app.route('/health')
