@@ -51,7 +51,7 @@ def create_app():
   # CORS simple y permisivo para desarrollo
   CORS(app,
         resources={r"/api/*": {
-          "origins": "*",
+          "origins": ["http://localhost:5173"],
           "allow_headers": "*",
           "methods": "*"
         }},
