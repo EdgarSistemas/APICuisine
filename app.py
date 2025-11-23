@@ -49,10 +49,12 @@ def create_app():
   app.config.from_object(config)
   
   # CORS simple y permisivo para desarrollo
-  CORS(app, 
-        origins="*",
-        allow_headers="*",
-        methods="*",
+  CORS(app,
+        resources={r"/api/*": {
+          "origins": "*",
+          "allow_headers": "*",
+          "methods": "*"
+        }},
         supports_credentials=False
   )
   
