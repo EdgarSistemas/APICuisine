@@ -1,47 +1,53 @@
 """
-PedidoController - Gestión de Pedidos y Consumo de Inventario
-Endpoints: POST (crear), POST (agregar item), POST (confirmar cocina - CRITICAL),
-GET (listar), GET/{id} (obtener), PATCH (cambiar estatus items)
+PedidoController - API Endpoints para Gestión de Pedidos
+Endpoints:
+  POST   /api/pedidos              - Crear pedido Dine-in
+  POST   /api/pedidos/para-llevar  - Crear pedido Takeaway
+  GET    /api/pedidos/{id}         - Obtener pedido completo
+  POST   /api/pedidos/{id}/items   - Agregar item a pedido
+  PATCH  /api/pedidos/{id}/estado  - Cambiar estado (confirmar, preparacion, listo, entregado)
+  GET    /api/sucursales/{sid}/pedidos - Listar pedidos de sucursal
+
+Estados: 1=Creado, 2=Confirmado, 3=EnPreparacion, 4=Listo, 5=Entregado, 6=Cancelado
+Inventory consumed ONLY at estado=3 (EnPreparacion)
 """
 
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from marshmallow import ValidationError
+from datetime import datetime
 import logging
 
 from src.services.operaciones.pedido_service import PedidoService
-from src.services.operaciones.inventario_service import InventarioService
+from src.dao.operaciones.pedido_dao import PedidoDAO
 from src.schemas.pedido_schema import (
     PedidoCreateSchema,
-    PedidoItemCreateSchema,
-    PedidoConfirmarItemsSchema
+    PedidoResponseSchema,
+    PedidoListSchema,
+    PedidoItemSchema,
+    PedidoCambiarEstadoSchema
 )
-from src.core.utils.multitenant import (
-    es_admin, 
-    validar_acceso_sucursal, 
-    agregar_filtro_sucursal,
-    validar_pertenencia_sucursal,
-    validar_sucursal_existe
-)
-from src.models import Pedido
+from src.core.db.session_manager import get_db_session
+from src.models.operaciones.pedido_model import Pedido
 
 logger = logging.getLogger(__name__)
 bp = Blueprint('pedidos', __name__, url_prefix='/api/pedidos')
 
 
 # ============================================================================
-# POST /api/pedidos - Crear Pedido
+# POST /api/pedidos - Crear Pedido Dine-in
 # ============================================================================
+
 @bp.route('', methods=['POST'])
 @jwt_required()
-def crear_pedido():
+def crear_pedido_dine_in():
     """
-    Crear nuevo pedido ligado a una reserva.
+    Crea un nuevo pedido tipo Dine-in (con mesa y reserva activa)
     ---
     tags:
       - Pedidos
-    summary: "Paso 1: Crear Pedido"
-    description: Crea un nuevo pedido vinculado a una reserva completada. El pedido es donde se agregan los items (productos/combos) que el cliente va a consumir. Un pedido solo puede tener un asociado por reserva (validación automática).
+    summary: "Crear Pedido Dine-in"
+    description: Crea un pedido para cliente que come en el restaurante (con mesa). Requiere reserva activa en estado 1 o 2.
     parameters:
       - in: body
         name: body
@@ -49,653 +55,664 @@ def crear_pedido():
         schema:
           type: object
           required:
-            - reserva_id
             - sucursal_id
-            - inicia_usuario_id
+            - reserva_id
+            - items
           properties:
-            reserva_id:
-              type: integer
-              description: "ID de la reserva completada (debe estar en estado Completada=3). Ej: 10"
             sucursal_id:
               type: integer
-              description: "ID de la sucursal donde se crea el pedido. Ej: 1"
-            inicia_usuario_id:
-              type: integer
-              description: "ID del usuario que inicia el pedido (mesero, cliente, etc). Ej: 5"
+              description: ID de sucursal
+              example: 1
             cliente_id:
               type: integer
-              description: "ID del cliente (opcional). Ej: 1"
+              description: ID del cliente (opcional)
+              example: 123
             tipo_pedido:
               type: integer
-              description: "Tipo de pedido (default: 1). 1=Dine-in (en el restaurante), 2=Pickup (recoge después), 3=Delivery (entrega a domicilio)"
-              default: 1
+              description: Tipo (1=Dine-in, 2=Takeaway)
+              example: 1
             canal:
               type: integer
-              description: "Canal por el que se realiza el pedido (default: 2). 1=Mesero (manual), 2=Sistema (POS), 3=App (aplicación móvil)"
-              default: 2
+              description: Canal (1=PWA, 2=Móvil)
+              example: 2
+            reserva_id:
+              type: integer
+              description: ID de reserva activa
+              example: 456
             notas:
               type: string
-              description: "Notas o instrucciones especiales del pedido. Ej: 'Sin cebolla, sin queso'. (opcional)"
-        example:
-          reserva_id: 10
-          sucursal_id: 1
-          inicia_usuario_id: 5
-          cliente_id: 1
-          tipo_pedido: 1
-          canal: 2
-          notas: "Cliente con alergia al maní"
+              description: Notas especiales
+              example: "Sin picante"
+            items:
+              type: array
+              required: true
+              items:
+                type: object
+                required:
+                  - cantidad
+                properties:
+                  producto_id:
+                    type: integer
+                    description: ID producto (XOR con combo_id)
+                    example: 10
+                  combo_id:
+                    type: integer
+                    description: ID combo (XOR con producto_id)
+                    example: null
+                  cantidad:
+                    type: integer
+                    description: Cantidad (1-100)
+                    example: 2
+                  notas:
+                    type: string
+                    example: "Extra queso"
     responses:
       201:
-        description: "Pedido creado exitosamente"
+        description: Pedido creado exitosamente
         schema:
           type: object
           properties:
-            message:
+            mensaje:
               type: string
-              example: "Pedido creado exitosamente"
             pedido:
               type: object
       400:
-        description: "Validación fallida o datos inválidos"
-      403:
-        description: "Sin acceso a la sucursal"
+        description: Validación fallida
       404:
-        description: "Reserva no existe"
-      409:
-        description: "Pedido ya existe para esta reserva"
+        description: Reserva no existe
     x-code-samples:
       - lang: curl
         source: |
-          curl -X POST http://localhost:5000/api/pedidos/ \\
+          curl -X POST http://localhost:5000/api/pedidos \\
+            -H "Authorization: Bearer YOUR_TOKEN" \\
             -H "Content-Type: application/json" \\
-            -H "Authorization: Bearer YOUR_JWT_TOKEN" \\
             -d '{
-              "reserva_id": 10,
               "sucursal_id": 1,
-              "inicia_usuario_id": 5,
-              "cliente_id": 1,
-              "tipo_pedido": 1,
-              "canal": 2,
-              "notas": "Cliente con alergia al maní"
+              "cliente_id": 123,
+              "reserva_id": 456,
+              "notas": "Sin picante",
+              "items": [
+                {"producto_id": 10, "cantidad": 2, "notas": "Extra queso"},
+                {"combo_id": 5, "cantidad": 1}
+              ]
             }'
     """
     try:
-        # Validar schema
+        usuario_id = get_jwt_identity()
+        
+        # Validar payload
         schema = PedidoCreateSchema()
-        data = schema.load(request.json)
+        try:
+            datos = schema.load(request.get_json())
+        except ValidationError as e:
+            return jsonify({"error": "Validación fallida", "detalles": e.messages}), 400
         
-        # Usuario autenticado
-        current_user = get_jwt_identity()
-        usuario_id = current_user.get('id_usuario')
+        # Validar tipo_pedido = 1 (Dine-in)
+        if datos.get('tipo_pedido') != 1:
+            return jsonify({"error": "Este endpoint es para pedidos Dine-in (tipo_pedido=1)"}), 400
         
-        # Verificar acceso a sucursal
-        if not validar_acceso_sucursal(usuario_id, data['sucursal_id']):
-            return jsonify({"error": "No tienes acceso a esta sucursal"}), 403
-        
-        # Usar servicio para crear pedido con validaciones
-        result = PedidoService.crear_pedido(
-            reserva_id=data['reserva_id'],
-            sucursal_id=data['sucursal_id'],
-            inicia_usuario_id=data['inicia_usuario_id']
+        # Crear pedido
+        pedido = PedidoService.crear_pedido_dine_in(
+            sucursal_id=datos['sucursal_id'],
+            cliente_id=datos['cliente_id'],
+            canal=datos['canal'],
+            reserva_id=datos['reserva_id'],
+            inicia_usuario_id=usuario_id,
+            items=datos['items'],
+            notas=datos.get('notas')
         )
         
-        if not result['success']:
-            if 'no existe' in result.get('error', ''):
-                return jsonify({"error": result['error']}), 404
-            elif 'ya existe' in result.get('error', ''):
-                return jsonify({"error": result['error']}), 409
-            else:
-                return jsonify({"error": result['error']}), 400
+        response_schema = PedidoResponseSchema()
+        
+        logger.info(f"Pedido Dine-in {pedido['id_pedido']} creado por usuario {usuario_id}")
         
         return jsonify({
-            "message": "Pedido creado exitosamente",
-            "pedido": result['data']
+            "mensaje": "Pedido creado exitosamente",
+            "pedido": response_schema.dump(pedido)
         }), 201
-        
-    except ValidationError as e:
-        logger.error(f"Error de validación en crear_pedido: {e.messages}")
-        return jsonify({"error": "Datos inválidos", "detalles": e.messages}), 400
+    
+    except ValueError as e:
+        logger.error(f"Error de validación: {str(e)}")
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
-        logger.error(f"Error en crear_pedido: {str(e)}")
-        return jsonify({"error": f"Error interno: {str(e)}"}), 500
+        logger.error(f"Error al crear pedido Dine-in: {str(e)}")
+        return jsonify({"error": "Error interno", "detalles": str(e)}), 500
 
 
 # ============================================================================
-# GET /api/pedidos - Listar Pedidos
+# POST /api/pedidos/para-llevar - Crear Pedido Takeaway
 # ============================================================================
-@bp.route('', methods=['GET'])
+
+@bp.route('/para-llevar', methods=['POST'])
 @jwt_required()
-def obtener_pedidos():
+def crear_pedido_takeaway():
     """
-    Listar pedidos con filtros opcionales.
+    Crea un nuevo pedido tipo Takeaway (sin mesa, crea reserva interna)
     ---
     tags:
       - Pedidos
-    summary: Obtener lista de pedidos
-    description: Retorna lista de pedidos. Cocina ve solo items en cocina. Multi-tenant filtering automático.
+    summary: "Crear Pedido Takeaway"
+    description: Crea un pedido para cliente que recoge en sucursal (para llevar). Crea automáticamente una reserva interna con estatus=5 (recepcionista_id=NULL).
     parameters:
-      - in: query
-        name: sucursal_id
-        type: integer
-        description: Filtrar por sucursal (opcional)
-      - in: query
-        name: estatus
-        type: integer
-        description: Filtrar por estatus (1=Abierto, 2=Enviado, 3=Entregado, 4=Cancelado)
+      - in: body
+        name: body
+        required: true
+        schema:
+          type: object
+          required:
+            - sucursal_id
+            - cliente_id
+            - items
+          properties:
+            sucursal_id:
+              type: integer
+              example: 1
+            cliente_id:
+              type: integer
+              description: ID cliente (REQUERIDO para Takeaway)
+              example: 123
+            canal:
+              type: integer
+              example: 2
+            notas:
+              type: string
+              example: "Sin cebolla"
+            items:
+              type: array
+              required: true
+              items:
+                type: object
+                properties:
+                  producto_id:
+                    type: integer
+                  combo_id:
+                    type: integer
+                  cantidad:
+                    type: integer
     responses:
-      200:
-        description: Lista de pedidos
-        content:
-          application/json:
-            schema:
+      201:
+        description: Pedido Takeaway creado
+        schema:
+          type: object
+          properties:
+            mensaje:
+              type: string
+            pedido:
               type: object
-              properties:
-                pedidos:
-                  type: array
-                  items:
-                    type: object
-                total:
-                  type: integer
+            reserva_interna_id:
+              type: integer
+      400:
+        description: Validación fallida o cliente_id faltante
+    x-code-samples:
+      - lang: curl
+        source: |
+          curl -X POST http://localhost:5000/api/pedidos/para-llevar \\
+            -H "Authorization: Bearer YOUR_TOKEN" \\
+            -H "Content-Type: application/json" \\
+            -d '{
+              "sucursal_id": 1,
+              "cliente_id": 123,
+              "notas": "Sin cebolla",
+              "items": [
+                {"producto_id": 10, "cantidad": 2}
+              ]
+            }'
     """
     try:
-        current_user = get_jwt_identity()
-        usuario_id = current_user.get('id_usuario')
+        usuario_id = get_jwt_identity()
         
-        # TODO: Implementar lógica de rol para Cocina
-        # Por ahora listar todos
+        # Validar payload (tipo_pedido debe ser 2)
+        payload = request.get_json()
+        payload['tipo_pedido'] = 2  # Forzar Takeaway
         
-        from src.core.db.session_manager import get_db_session
-        with get_db_session() as session:
-            query = session.query(Pedido)
-            
-            # Aplicar filtro multi-tenant
-            query = agregar_filtro_sucursal(query, Pedido, usuario_id)
-            
-            # Filtros opcionales
-            sucursal_id = request.args.get('sucursal_id', type=int)
-            if sucursal_id:
-                query = query.filter(Pedido.sucursal_id == sucursal_id)
-            
-            estatus = request.args.get('estatus', type=int)
-            if estatus:
-                query = query.filter(Pedido.estado_pedido == estatus)
-            
-            pedidos = query.order_by(Pedido.created_at.desc()).all()
-            
-            return jsonify({
-                "pedidos": [p.to_dict() for p in pedidos],
-                "total": len(pedidos)
-            }), 200
-            
+        schema = PedidoCreateSchema()
+        try:
+            datos = schema.load(payload)
+        except ValidationError as e:
+            return jsonify({"error": "Validación fallida", "detalles": e.messages}), 400
+        
+        # Validar cliente_id OBLIGATORIO para takeaway
+        if not datos.get('cliente_id'):
+            return jsonify({"error": "cliente_id es OBLIGATORIO para pedidos Takeaway"}), 400
+        
+        # Crear pedido takeaway
+        pedido = PedidoService.crear_pedido_takeaway(
+            sucursal_id=datos['sucursal_id'],
+            cliente_id=datos['cliente_id'],
+            canal=datos['canal'],
+            inicia_usuario_id=usuario_id,
+            items=datos['items'],
+            notas=datos.get('notas')
+        )
+        
+        response_schema = PedidoResponseSchema()
+        
+        logger.info(f"Pedido Takeaway {pedido['id_pedido']} creado por usuario {usuario_id}")
+        
+        return jsonify({
+            "mensaje": "Pedido Takeaway creado exitosamente",
+            "pedido": response_schema.dump(pedido),
+            "reserva_interna_id": pedido.get('reserva_interna_id')
+        }), 201
+    
+    except ValueError as e:
+        logger.error(f"Error de validación: {str(e)}")
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
-        logger.error(f"Error listando pedidos: {str(e)}")
-        return jsonify({"error": f"Error interno: {str(e)}"}), 500
+        logger.error(f"Error al crear pedido Takeaway: {str(e)}")
+        return jsonify({"error": "Error interno", "detalles": str(e)}), 500
 
 
 # ============================================================================
-# GET /api/pedidos/{pedido_id} - Obtener Pedido por ID
+# GET /api/pedidos/{id} - Obtener Pedido Completo
 # ============================================================================
+
 @bp.route('/<int:pedido_id>', methods=['GET'])
 @jwt_required()
 def obtener_pedido(pedido_id):
     """
-    Obtener detalle completo de un pedido.
+    Obtiene los detalles completos de un pedido con items e histórico
     ---
     tags:
       - Pedidos
-    summary: Obtener detalle de pedido
-    description: Retorna datos completos del pedido incluyendo items, con serialización completa.
+    summary: "Obtener Pedido"
+    description: Retorna el pedido completo incluyendo todos los items, histórico de estados, y detalles de consumo de inventario.
     parameters:
       - in: path
         name: pedido_id
         type: integer
         required: true
         description: ID del pedido
+        example: 25
     responses:
       200:
-        description: Datos del pedido
-        content:
-          application/json:
-            schema:
+        description: Pedido encontrado
+        schema:
+          type: object
+          properties:
+            pedido:
               type: object
-      403:
-        description: Sin acceso a esta sucursal
       404:
         description: Pedido no existe
+    x-code-samples:
+      - lang: curl
+        source: |
+          curl -X GET http://localhost:5000/api/pedidos/25 \\
+            -H "Authorization: Bearer YOUR_TOKEN"
     """
     try:
-        current_user = get_jwt_identity()
-        usuario_id = current_user.get('id_usuario')
+        pedido = PedidoService.obtener_pedido(pedido_id)
         
-        result = PedidoService.obtener_pedido(pedido_id)
+        response_schema = PedidoResponseSchema()
         
-        if not result['success']:
-            return jsonify({"error": result['error']}), 404
-        
-        # Validar acceso a sucursal
-        sucursal_id = result['data'].get('sucursal_id')
-        if not validar_acceso_sucursal(usuario_id, sucursal_id):
-            return jsonify({"error": "No tienes acceso a esta sucursal"}), 403
-        
-        return jsonify(result['data']), 200
-        
-    except Exception as e:
-        logger.error(f"Error en obtener_pedido {pedido_id}: {str(e)}")
-        return jsonify({"error": f"Error interno: {str(e)}"}), 500
-
-
-# ============================================================================
-# POST /api/pedidos/{pedido_id}/items - Agregar Item a Pedido
-# ============================================================================
-@bp.route('/<int:pedido_id>/items', methods=['POST'])
-@jwt_required()
-def agregar_item(pedido_id):
-    """
-    Agregar producto o combo al pedido.
-    ---
-    tags:
-      - Pedidos - Items
-    summary: Agregar item a pedido
-    description: Permite agregar productos o combos a un pedido. Un item puede tener muchos productos antes de confirmar a cocina.
-    parameters:
-      - in: path
-        name: pedido_id
-        type: integer
-        required: true
-    requestBody:
-      required: true
-      content:
-        application/json:
-          schema:
-            type: object
-            required:
-              - cantidad
-            properties:
-              producto_id:
-                type: integer
-                description: ID del producto (requerido si no hay combo_id)
-              combo_id:
-                type: integer
-                description: ID del combo (requerido si no hay producto_id)
-              cantidad:
-                type: integer
-                description: Cantidad (1-100)
-                example: 2
-              precio:
-                type: number
-                description: Precio unitario (opcional)
-                example: 150.00
-    responses:
-      201:
-        description: Item agregado exitosamente
-      400:
-        description: Validación fallida o producto/combo inválido
-      404:
-        description: Pedido no existe
-    """
-    try:
-        schema = PedidoItemCreateSchema()
-        data = schema.load(request.json)
-        
-        current_user = get_jwt_identity()
-        usuario_id = current_user.get('id_usuario')
-        
-        result = PedidoService.agregar_item(
-            pedido_id=pedido_id,
-            producto_id=data.get('producto_id'),
-            combo_id=data.get('combo_id'),
-            cantidad=data['cantidad'],
-            precio=data.get('precio')
-        )
-        
-        if not result['success']:
-            if 'no existe' in result.get('error', ''):
-                return jsonify({"error": result['error']}), 404
-            else:
-                return jsonify({"error": result['error']}), 400
+        logger.info(f"Pedido {pedido_id} obtenido")
         
         return jsonify({
-            "message": "Item agregado exitosamente",
-            "item": result['data']
-        }), 201
-        
-    except ValidationError as e:
-        logger.error(f"Error de validación en agregar_item: {e.messages}")
-        return jsonify({"error": "Datos inválidos", "detalles": e.messages}), 400
+            "pedido": response_schema.dump(pedido)
+        }), 200
+    
+    except ValueError as e:
+        logger.error(f"Pedido no encontrado: {str(e)}")
+        return jsonify({"error": str(e)}), 404
     except Exception as e:
-        logger.error(f"Error en agregar_item: {str(e)}")
-        return jsonify({"error": f"Error interno: {str(e)}"}), 500
+        logger.error(f"Error al obtener pedido: {str(e)}")
+        return jsonify({"error": "Error interno", "detalles": str(e)}), 500
 
 
 # ============================================================================
-# POST /api/pedidos/{pedido_id}/confirmar-items - CRITICAL: Enviar a Cocina
+# POST /api/pedidos/{id}/items - Agregar Item a Pedido
 # ============================================================================
-@bp.route('/<int:pedido_id>/confirmar-items', methods=['POST'])
+
+@bp.route('/<int:pedido_id>/items', methods=['POST'])
 @jwt_required()
-def confirmar_items_a_cocina(pedido_id):
+def agregar_item_a_pedido(pedido_id):
     """
-    Confirmar items y enviar a cocina - ⚠️ TRIGGERS INVENTORY CONSUMPTION.
+    Agrega un item (producto o combo) a un pedido en estado Creado
     ---
     tags:
       - Pedidos - Items
-      - Inventario
-    summary: "Paso 3: Confirmar Items a Cocina (CRITICAL)"
-    description: |
-      **⚠️ OPERACIÓN CRÍTICA ⚠️**
-      
-      Confirma items y los envía a cocina. ESTO DISPARA EL CONSUMO IRREVERSIBLE DE INVENTARIO.
-      
-      IMPORTANTE:
-      - Cambio de estatus: 1 (Agregado) → 2 (Confirmado) → 3 (EnCocina)
-      - ATOMIC: Todo o nada (all-or-nothing)
-      - IRREVERSIBLE: Una vez consumido, NO hay rollback automático
-      - FIFO: Usa lotes más próximos a vencer primero
-      - Si falla inventario: Revierte cambios automáticamente
-      - Máximo 50 items por operación
-      
-      PRECONDICIONES:
-      1. Pedido debe estar Abierto (estado=1)
-      2. Items deben estar en estado Agregado (1)
-      3. Debe haber inventario suficiente
+    summary: "Agregar Item a Pedido"
+    description: Agrega un producto o combo a un pedido mientras está en estado Creado (1). Máximo 100 unidades por item.
     parameters:
       - in: path
         name: pedido_id
         type: integer
         required: true
-        description: "ID del pedido. Ej: 25"
+        example: 25
       - in: body
         name: body
         required: true
         schema:
           type: object
           required:
-            - item_ids
+            - cantidad
           properties:
-            item_ids:
-              type: array
-              items:
-                type: integer
-              description: "Array de IDs de items a confirmar. Máximo 50. Ej: [1, 2, 3]"
-        example:
-          item_ids: [1, 2]
-    responses:
-      200:
-        description: "Items confirmados e inventario consumido exitosamente"
-        schema:
-          type: object
-          properties:
-            message:
-              type: string
-              example: "Items confirmados y enviados a cocina"
-            items_confirmados:
+            producto_id:
               type: integer
+              description: ID producto (XOR con combo_id)
+              example: 10
+            combo_id:
+              type: integer
+              description: ID combo (XOR con producto_id)
+            cantidad:
+              type: integer
+              description: Cantidad (1-100)
               example: 2
-            movimientos_inventario:
-              type: array
-              description: "Detalles de los movimientos de inventario realizados"
-      400:
-        description: "Validación fallida o inventario insuficiente"
+            notas:
+              type: string
+              example: "Extra queso"
+    responses:
+      201:
+        description: Item agregado exitosamente
         schema:
           type: object
           properties:
-            error:
+            mensaje:
               type: string
-              example: "Inventario insuficiente"
-      403:
-        description: "Sin acceso a sucursal"
+            item:
+              type: object
+      400:
+        description: Validación fallida o XOR violation
       404:
-        description: "Pedido o items no existen"
-    x-validation-notes: |
-      VALIDACIONES INTERNAS:
-      1. Pedido debe existir y estar en estado Abierto (1)
-      2. Items deben existir y estar en estado Agregado (1)
-      3. Verificar inventario disponible (FIFO por lote)
-      4. Si falla: Revierte todo automáticamente
-      5. Registra movimientos de inventario en auditoría
+        description: Pedido no existe
     x-code-samples:
       - lang: curl
         source: |
-          curl -X POST http://localhost:5000/api/pedidos/25/confirmar-items \\
+          curl -X POST http://localhost:5000/api/pedidos/25/items \\
+            -H "Authorization: Bearer YOUR_TOKEN" \\
             -H "Content-Type: application/json" \\
-            -H "Authorization: Bearer YOUR_JWT_TOKEN" \\
             -d '{
-              "item_ids": [1, 2]
+              "producto_id": 10,
+              "cantidad": 2,
+              "notas": "Extra queso"
             }'
     """
     try:
-        schema = PedidoConfirmarItemsSchema()
-        data = schema.load(request.json)
+        # Validar payload
+        payload = request.get_json()
         
-        current_user = get_jwt_identity()
-        usuario_id = current_user.get('id_usuario')
+        if not payload.get('producto_id') and not payload.get('combo_id'):
+            return jsonify({"error": "Debe proporcionar producto_id o combo_id"}), 400
+        if payload.get('producto_id') and payload.get('combo_id'):
+            return jsonify({"error": "No puede proporcionar ambos: producto_id y combo_id"}), 400
         
-        logger.info(f"INICIO: Confirmar items {data['item_ids']} de pedido {pedido_id}")
-        
-        # Obtener pedido para validar sucursal
-        pedido_result = PedidoService.obtener_pedido(pedido_id)
-        if not pedido_result['success']:
-            return jsonify({"error": pedido_result['error']}), 404
-        
-        sucursal_id = pedido_result['data'].get('sucursal_id')
-        if not validar_acceso_sucursal(usuario_id, sucursal_id):
-            return jsonify({"error": "No tienes acceso a esta sucursal"}), 403
-        
-        # Confirmar items a cocina (TRIGGERS INVENTORY)
-        result = PedidoService.confirmar_items_a_cocina(
+        # Agregar item
+        item = PedidoService.agregar_item(
             pedido_id=pedido_id,
-            item_ids=data['item_ids'],
-            usuario_id=usuario_id
+            producto_id=payload.get('producto_id'),
+            combo_id=payload.get('combo_id'),
+            cantidad=payload.get('cantidad', 1),
+            notas=payload.get('notas')
         )
         
-        if not result['success']:
-            error_msg = result.get('error', '')
-            
-            # Inventario insuficiente
-            if 'insuficiente' in error_msg.lower() or 'no hay' in error_msg.lower():
-                logger.warning(f"INVENTORY FAILED: {error_msg}")
-                return jsonify({
-                    "error": "Inventario insuficiente",
-                    "details": error_msg
-                }), 400
-            
-            # Pedido/items no existen
-            if 'no existe' in error_msg:
-                return jsonify({"error": error_msg}), 404
-            
-            # Otro error
-            logger.error(f"CONFIRMAR ITEMS ERROR: {error_msg}")
-            return jsonify({"error": error_msg}), 400
-        
-        logger.info(f"SUCCESS: Items confirmados, inventario consumido. Movimientos: {len(result['data'].get('movimientos', []))}")
+        logger.info(f"Item agregado a pedido {pedido_id}: {item}")
         
         return jsonify({
-            "message": "Items confirmados y enviados a cocina",
-            "items_confirmados": result['data'].get('items_confirmados', 0),
-            "movimientos_inventario": result['data'].get('movimientos', [])
-        }), 200
-        
-    except ValidationError as e:
-        logger.error(f"Error de validación en confirmar_items_a_cocina: {e.messages}")
-        return jsonify({"error": "Datos inválidos", "detalles": e.messages}), 400
+            "mensaje": "Item agregado exitosamente",
+            "item": item
+        }), 201
+    
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
-        logger.error(f"EXCEPTION en confirmar_items_a_cocina: {str(e)}", exc_info=True)
-        return jsonify({"error": f"Error interno: {str(e)}"}), 500
+        logger.error(f"Error al agregar item: {str(e)}")
+        return jsonify({"error": "Error interno", "detalles": str(e)}), 500
 
 
 # ============================================================================
-# PATCH /api/pedidos/{pedido_id}/items/{item_id}/listo - Marcar como Listo (Cocina)
+# PATCH /api/pedidos/{id}/estado - Cambiar Estado de Pedido
 # ============================================================================
-@bp.route('/<int:pedido_id>/items/<int:item_id>/listo', methods=['PATCH'])
+
+@bp.route('/<int:pedido_id>/estado', methods=['PATCH'])
 @jwt_required()
-def marcar_item_listo(pedido_id, item_id):
+def cambiar_estado_pedido(pedido_id):
     """
-    Marcar item como listo (Cocina → Listo).
+    Cambia el estado de un pedido (confirmación, a cocina, listo, entregado, cancelado)
     ---
     tags:
-      - Pedidos - Items
-    summary: Marcar item como listo
-    description: Transición de estatus 3 (EnCocina) → 4 (Listo). Típicamente llamado desde la estación de cocina.
+      - Pedidos - Estados
+    summary: "Cambiar Estado de Pedido (⚠️ CRITICAL: Inventory Consumed at Estado 3)"
+    description: |
+      Cambia el estado del pedido. IMPORTANTE: El paso a estado 3 (EnPreparacion) DISPARA EL CONSUMO DE INVENTARIO.
+      
+      Transiciones válidas:
+      - 1 → 2 (Creado → Confirmado)
+      - 2 → 3 (Confirmado → EnPreparacion) ⚠️ **INVENTORY CONSUMED HERE**
+      - 3 → 4 (EnPreparacion → Listo)
+      - 4 → 5 (Listo → Entregado)
+      - Cualquiera → 6 (Cancelado, solo si estado ≤ 2)
+      
+      **FLUJO DE CONSUMO DE INVENTARIO (Estado 2→3):**
+      1. Para cada item Producto: obtiene receta → consume insumos por FIFO
+      2. Para cada item Combo: resuelve Combo→Productos→Recetas→Insumos → consume FIFO
+      3. Si falta stock: ROLLBACK completo (atómico)
+      4. Si éxito: crea Movimientos de auditoría
     parameters:
       - in: path
         name: pedido_id
         type: integer
         required: true
-      - in: path
-        name: item_id
-        type: integer
+        example: 25
+      - in: body
+        name: body
         required: true
+        schema:
+          type: object
+          required:
+            - estado_pedido
+          properties:
+            estado_pedido:
+              type: integer
+              description: Nuevo estado (2, 3, 4, 5, o 6)
+              example: 2
+            comentario:
+              type: string
+              description: Comentario opcional
+              example: "Pedido confirmado por cliente"
     responses:
       200:
-        description: Item marcado como listo
+        description: Estado actualizado exitosamente
+        schema:
+          type: object
+          properties:
+            mensaje:
+              type: string
+            pedido:
+              type: object
       400:
-        description: Item no está en cocina
+        description: Validación fallida o stock insuficiente
       404:
-        description: Pedido o item no existe
+        description: Pedido no existe
+    x-code-samples:
+      - lang: curl
+        source: |
+          curl -X PATCH http://localhost:5000/api/pedidos/25/estado \\
+            -H "Authorization: Bearer YOUR_TOKEN" \\
+            -H "Content-Type: application/json" \\
+            -d '{
+              "estado_pedido": 2,
+              "comentario": "Confirmado por cliente"
+            }'
+      - lang: curl
+        source: |
+          curl -X PATCH http://localhost:5000/api/pedidos/25/estado \\
+            -H "Authorization: Bearer YOUR_TOKEN" \\
+            -H "Content-Type: application/json" \\
+            -d '{
+              "estado_pedido": 3,
+              "comentario": "Enviado a cocina (INVENTORY CONSUMED HERE)"
+            }'
     """
     try:
-        current_user = get_jwt_identity()
-        usuario_id = current_user.get('id_usuario')
+        usuario_id = get_jwt_identity()
         
-        result = PedidoService.marcar_listo(
-            pedido_id=pedido_id,
-            item_id=item_id
-        )
+        # Validar payload
+        schema = PedidoCambiarEstadoSchema()
+        try:
+            datos = schema.load(request.get_json())
+        except ValidationError as e:
+            return jsonify({"error": "Validación fallida", "detalles": e.messages}), 400
         
-        if not result['success']:
-            if 'no existe' in result.get('error', ''):
-                return jsonify({"error": result['error']}), 404
-            else:
-                return jsonify({"error": result['error']}), 400
+        nuevo_estado = datos['estado_pedido']
+        comentario = datos.get('comentario')
+        
+        # Obtener pedido actual
+        pedido = PedidoDAO.obtener_pedido_completo(pedido_id)
+        if not pedido:
+            return jsonify({"error": f"Pedido {pedido_id} no existe"}), 404
+        
+        estado_actual = pedido['estado_pedido']
+        
+        # Procesar según nuevo estado
+        if nuevo_estado == 2:  # Confirmación
+            resultado = PedidoService.confirmar_pedido(pedido_id, usuario_id)
+        
+        elif nuevo_estado == 3:  # A preparación (INVENTORY CONSUMPTION HAPPENS HERE)
+            try:
+                resultado = PedidoService.cambiar_a_preparacion(pedido_id, usuario_id)
+            except ValueError as e:
+                return jsonify({"error": str(e)}), 400
+        
+        elif nuevo_estado == 4:  # Listo
+            resultado = PedidoService.cambiar_a_listo(pedido_id, usuario_id)
+        
+        elif nuevo_estado == 5:  # Entregado
+            resultado = PedidoService.entregar_pedido(pedido_id, usuario_id)
+        
+        elif nuevo_estado == 6:  # Cancelado
+            try:
+                resultado = PedidoService.cancelar_pedido(pedido_id, usuario_id, comentario)
+            except ValueError as e:
+                return jsonify({"error": str(e)}), 400
+        
+        else:
+            return jsonify({"error": f"Estado {nuevo_estado} no válido"}), 400
+        
+        response_schema = PedidoResponseSchema()
+        
+        logger.info(f"Pedido {pedido_id}: estado {estado_actual} → {nuevo_estado} por usuario {usuario_id}")
         
         return jsonify({
-            "message": "Item marcado como listo",
-            "item": result['data']
+            "mensaje": f"Pedido actualizado a estado {nuevo_estado}",
+            "pedido": response_schema.dump(resultado)
         }), 200
-        
+    
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
-        logger.error(f"Error en marcar_item_listo: {str(e)}")
-        return jsonify({"error": f"Error interno: {str(e)}"}), 500
+        logger.error(f"Error al cambiar estado: {str(e)}")
+        return jsonify({"error": "Error interno", "detalles": str(e)}), 500
 
 
 # ============================================================================
-# PUT /api/pedidos/{pedido_id} - Actualizar Pedido (notas, etc)
+# GET /api/sucursales/{sucursal_id}/pedidos - Listar Pedidos
 # ============================================================================
-@bp.route('/<int:pedido_id>', methods=['PUT'])
+
+@bp.route('', methods=['GET'])
 @jwt_required()
-def actualizar_pedido(pedido_id):
+def listar_pedidos():
     """
-    Actualizar notas u otros campos del pedido.
+    Lista pedidos de una sucursal con filtros opcionales
     ---
     tags:
       - Pedidos
-    summary: Actualizar pedido
-    description: Permite actualizar campos como notas del pedido.
+    summary: "Listar Pedidos"
+    description: Retorna lista paginada de pedidos con filtros opcionales por estado, rango de fechas.
     parameters:
-      - in: path
-        name: pedido_id
+      - in: query
+        name: sucursal_id
         type: integer
         required: true
-    requestBody:
-      required: true
-      content:
-        application/json:
-          schema:
-            type: object
-            properties:
-              notas:
-                type: string
-                description: Notas del pedido
-    responses:
-      200:
-        description: Pedido actualizado
-      404:
-        description: Pedido no existe
-      403:
-        description: Sin acceso a sucursal
-    """
-    try:
-        current_user = get_jwt_identity()
-        usuario_id = current_user.get('id_usuario')
-        data = request.get_json()
-        
-        from src.core.db.session_manager import get_db_session
-        with get_db_session() as session:
-            pedido = session.query(Pedido).get(pedido_id)
-            
-            if not pedido:
-                return jsonify({"error": "Pedido no existe"}), 404
-            
-            # Validar acceso
-            if not validar_acceso_sucursal(usuario_id, pedido.sucursal_id):
-                return jsonify({"error": "No tienes acceso a esta sucursal"}), 403
-            
-            # Actualizar campos permitidos
-            if 'notas' in data:
-                pedido.notas = data['notas']
-            
-            session.commit()
-            logger.info(f"Pedido {pedido_id} actualizado por usuario {usuario_id}")
-            
-            return jsonify({
-                "message": "Pedido actualizado",
-                "pedido": pedido.to_dict()
-            }), 200
-            
-    except Exception as e:
-        logger.error(f"Error actualizando pedido {pedido_id}: {str(e)}")
-        return jsonify({"error": f"Error interno: {str(e)}"}), 500
-
-
-# ============================================================================
-# DELETE /api/pedidos/{pedido_id} - Cancelar Pedido (Soft Delete)
-# ============================================================================
-@bp.route('/<int:pedido_id>', methods=['DELETE'])
-@jwt_required()
-def eliminar_pedido(pedido_id):
-    """
-    Cancelar pedido - SOLO ADMIN.
-    ---
-    tags:
-      - Pedidos
-    summary: Cancelar pedido
-    description: Soft delete - cambia estatus a 4 (Cancelado). Solo administradores.
-    parameters:
-      - in: path
-        name: pedido_id
+        description: ID de sucursal
+        example: 1
+      - in: query
+        name: estado
         type: integer
-        required: true
+        description: Filtrar por estado (1-6)
+        example: 3
+      - in: query
+        name: fecha_desde
+        type: string
+        description: ISO date (YYYY-MM-DD)
+        example: "2025-11-01"
+      - in: query
+        name: fecha_hasta
+        type: string
+        description: ISO date (YYYY-MM-DD)
+        example: "2025-11-23"
+      - in: query
+        name: offset
+        type: integer
+        default: 0
+        description: Paginación offset
+      - in: query
+        name: limit
+        type: integer
+        default: 50
+        description: Paginación limit (máx 500)
     responses:
       200:
-        description: Pedido cancelado
-      403:
-        description: Sin permisos (solo admins)
-      404:
-        description: Pedido no existe
+        description: Lista de pedidos
+        schema:
+          type: object
+          properties:
+            pedidos:
+              type: array
+              items:
+                type: object
+            total:
+              type: integer
+            offset:
+              type: integer
+            limit:
+              type: integer
+      400:
+        description: Parámetros inválidos
+    x-code-samples:
+      - lang: curl
+        source: |
+          curl -X GET "http://localhost:5000/api/pedidos?sucursal_id=1&estado=3&offset=0&limit=10" \\
+            -H "Authorization: Bearer YOUR_TOKEN"
     """
     try:
-        current_user = get_jwt_identity()
-        usuario_id = current_user.get('id_usuario')
+        sucursal_id = request.args.get('sucursal_id', type=int)
+        if not sucursal_id:
+            return jsonify({"error": "sucursal_id es requerido"}), 400
         
-        # Validar que es admin
-        if not es_admin(usuario_id):
-            return jsonify({"error": "Solo administradores pueden cancelar pedidos"}), 403
+        estado = request.args.get('estado', type=int, default=None)
+        fecha_desde = request.args.get('fecha_desde')
+        fecha_hasta = request.args.get('fecha_hasta')
+        offset = request.args.get('offset', default=0, type=int)
+        limit = request.args.get('limit', default=50, type=int)
         
-        from src.core.db.session_manager import get_db_session
-        with get_db_session() as session:
-            pedido = session.query(Pedido).get(pedido_id)
-            
-            if not pedido:
-                return jsonify({"error": "Pedido no existe"}), 404
-            
-            # Soft delete: cambiar estado a cancelado
-            pedido.estado_pedido = 4  # 4 = Cancelado
-            session.commit()
-            logger.info(f"Pedido {pedido_id} cancelado por admin {usuario_id}")
-            
-            return jsonify({
-                "message": "Pedido cancelado exitosamente"
-            }), 200
-            
+        # Parsear fechas si vienen
+        try:
+            fecha_desde = datetime.fromisoformat(fecha_desde) if fecha_desde else None
+            fecha_hasta = datetime.fromisoformat(fecha_hasta) if fecha_hasta else None
+        except ValueError:
+            return jsonify({"error": "Formato de fecha inválido (use ISO format)"}), 400
+        
+        # Listar
+        pedidos, total = PedidoDAO.listar_pedidos_por_sucursal(
+            sucursal_id=sucursal_id,
+            fecha_desde=fecha_desde,
+            fecha_hasta=fecha_hasta,
+            estado=estado,
+            offset=offset,
+            limit=limit
+        )
+        
+        list_schema = PedidoListSchema(many=True)
+        
+        logger.info(f"Listado de {len(pedidos)} pedidos para sucursal {sucursal_id}")
+        
+        return jsonify({
+            "pedidos": list_schema.dump(pedidos),
+            "total": total,
+            "offset": offset,
+            "limit": limit
+        }), 200
+    
     except Exception as e:
-        logger.error(f"Error cancelando pedido {pedido_id}: {str(e)}")
-        return jsonify({"error": f"Error interno: {str(e)}"}), 500
+        logger.error(f"Error al listar pedidos: {str(e)}")
+        return jsonify({"error": "Error interno", "detalles": str(e)}), 500

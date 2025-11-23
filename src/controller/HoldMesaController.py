@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 hold_mesa_bp = Blueprint('hold_mesa', __name__, url_prefix='/api/holds')
 
 
-@hold_mesa_bp.route('/', methods=['POST'])
+@hold_mesa_bp.route('', methods=['POST'])
 @jwt_required()
 def crear_hold():
     """
@@ -199,7 +199,7 @@ def obtener_hold(hold_id):
         return jsonify({"error": f"Error interno: {str(e)}"}), 500
 
 
-@hold_mesa_bp.route('/', methods=['GET'])
+@hold_mesa_bp.route('', methods=['GET'])
 @jwt_required()
 def listar_holds_activos():
     """
@@ -371,6 +371,97 @@ def cancelar_hold(hold_id):
         return jsonify({"error": f"Error interno: {str(e)}"}), 500
 
 
+@hold_mesa_bp.route('/disponibilidad', methods=['POST'])
+@jwt_required()
+def verificar_disponibilidad():
+    """
+    Verificar disponibilidad de mesa en rango de fechas
+    ---
+    tags:
+      - Holds
+    summary: Verificar disponibilidad de mesa
+    description: Verifica si una mesa está disponible para reservar en un rango de fechas específico.
+    parameters:
+      - in: body
+        name: body
+        required: true
+        schema:
+          type: object
+          required:
+            - mesa_id
+            - inicio
+            - fin_estimado
+          properties:
+            mesa_id:
+              type: integer
+              description: ID de la mesa
+              example: 1
+            inicio:
+              type: string
+              format: date-time
+              description: Fecha/hora inicio (ISO format)
+              example: "2025-11-18T19:00:00"
+            fin_estimado:
+              type: string
+              format: date-time
+              description: Fecha/hora fin estimado (ISO format)
+              example: "2025-11-18T21:00:00"
+    responses:
+      200:
+        description: Verificación completada
+        schema:
+          type: object
+          properties:
+            disponible:
+              type: boolean
+            mensaje:
+              type: string
+      400:
+        description: Datos inválidos
+      500:
+        description: Error interno
+    """
+    try:
+        # Validar que request.json no sea None
+        if not request.json:
+            return jsonify({"error": "Body JSON es requerido"}), 400
+        
+        data = request.json
+        
+        # Validar campos requeridos
+        if not all(k in data for k in ['mesa_id', 'inicio', 'fin_estimado']):
+            return jsonify({"error": "Faltan campos requeridos: mesa_id, inicio, fin_estimado"}), 400
+        
+        # Parsear fechas
+        try:
+            inicio = datetime.fromisoformat(data['inicio'].replace('Z', '+00:00'))
+            fin_estimado = datetime.fromisoformat(data['fin_estimado'].replace('Z', '+00:00'))
+        except (ValueError, AttributeError) as e:
+            return jsonify({"error": f"Formato de fecha inválido: {str(e)}"}), 400
+        
+        # Verificar disponibilidad a través del service
+        result = HoldMesaService.verificar_disponibilidad_mesa(
+            data['mesa_id'],
+            inicio,
+            fin_estimado
+        )
+        
+        if not result['success']:
+            return jsonify({"error": result['error']}), 400
+        
+        return jsonify({
+            "disponible": result['disponible'],
+            "mensaje": result['mensaje']
+        }), 200
+        
+    except ValueError as e:
+        logger.error(f"Error de validación en verificar_disponibilidad: {str(e)}")
+        return jsonify({"error": f"Formato de fecha inválido: {str(e)}"}), 400
+    except Exception as e:
+        logger.error(f"Error en verificar_disponibilidad: {str(e)}", exc_info=True)
+        return jsonify({"error": f"Error interno: {str(e)}"}), 500
+
+
 @hold_mesa_bp.route('/<int:hold_id>/confirmar', methods=['POST'])
 @jwt_required()
 def confirmar_hold_endpoint(hold_id):
@@ -499,97 +590,6 @@ def confirmar_hold_endpoint(hold_id):
         
     except Exception as e:
         logger.error(f"Error en confirmar_hold: {str(e)}", exc_info=True)
-        return jsonify({"error": f"Error interno: {str(e)}"}), 500
-
-
-@hold_mesa_bp.route('/disponibilidad', methods=['POST'])
-@jwt_required()
-def verificar_disponibilidad():
-    """
-    Verificar disponibilidad de mesa en rango de fechas
-    ---
-    tags:
-      - Holds
-    summary: Verificar disponibilidad de mesa
-    description: Verifica si una mesa está disponible para reservar en un rango de fechas específico.
-    parameters:
-      - in: body
-        name: body
-        required: true
-        schema:
-          type: object
-          required:
-            - mesa_id
-            - inicio
-            - fin_estimado
-          properties:
-            mesa_id:
-              type: integer
-              description: ID de la mesa
-              example: 1
-            inicio:
-              type: string
-              format: date-time
-              description: Fecha/hora inicio (ISO format)
-              example: "2025-11-18T19:00:00"
-            fin_estimado:
-              type: string
-              format: date-time
-              description: Fecha/hora fin estimado (ISO format)
-              example: "2025-11-18T21:00:00"
-    responses:
-      200:
-        description: Verificación completada
-        schema:
-          type: object
-          properties:
-            disponible:
-              type: boolean
-            mensaje:
-              type: string
-      400:
-        description: Datos inválidos
-      500:
-        description: Error interno
-    """
-    try:
-        # Validar que request.json no sea None
-        if not request.json:
-            return jsonify({"error": "Body JSON es requerido"}), 400
-        
-        data = request.json
-        
-        # Validar campos requeridos
-        if not all(k in data for k in ['mesa_id', 'inicio', 'fin_estimado']):
-            return jsonify({"error": "Faltan campos requeridos: mesa_id, inicio, fin_estimado"}), 400
-        
-        # Parsear fechas
-        try:
-            inicio = datetime.fromisoformat(data['inicio'].replace('Z', '+00:00'))
-            fin_estimado = datetime.fromisoformat(data['fin_estimado'].replace('Z', '+00:00'))
-        except (ValueError, AttributeError) as e:
-            return jsonify({"error": f"Formato de fecha inválido: {str(e)}"}), 400
-        
-        # Verificar disponibilidad a través del service
-        result = HoldMesaService.verificar_disponibilidad_mesa(
-            data['mesa_id'],
-            inicio,
-            fin_estimado
-        )
-        
-        if not result['success']:
-            return jsonify({"error": result['error']}), 400
-        
-        return jsonify({
-            "disponible": result['disponible'],
-            "mensaje": result['mensaje']
-        }), 200
-        
-    except ValueError as e:
-        logger.error(f"Error de validación en verificar_disponibilidad: {str(e)}")
-        return jsonify({"error": f"Formato de fecha inválido: {str(e)}"}), 400
-    except Exception as e:
-        logger.error(f"Error en verificar_disponibilidad: {str(e)}", exc_info=True)
         return jsonify({"error": f"Error interno: {str(e)}"}), 500
 
 

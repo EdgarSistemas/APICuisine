@@ -6,6 +6,7 @@ Gestión de reservaciones confirmadas de mesas
 from datetime import datetime
 from sqlalchemy import and_, or_
 from src.models.operaciones.reserva_model import Reserva
+from src.models.operaciones.hold_mesa_model import HoldMesa
 from src.core.db.session_manager import get_db_session
 from src.schemas.reserva_schema import ReservaResponseSchema
 import logging
@@ -21,6 +22,56 @@ class ReservaDAO:
     """Data Access Object para Reserva"""
     
     @staticmethod
+    def verificar_reserva_disponible(mesa_id: int, inicio: datetime, fin_estimado: datetime) -> bool:
+        """
+        Verificar si hay traslape con otras RESERVAS activas (confirmadas).
+        
+        ⚡ IMPORTANTE: 
+        - SOLO valida Reservas, NO Holds
+        - Suma 10 minutos de limpieza automáticamente
+        
+        Args:
+            mesa_id: ID de la mesa
+            inicio: Fecha/hora inicio deseada
+            fin_estimado: Fecha/hora fin estimado
+            
+        Returns:
+            True si está disponible, False si hay conflicto con otra reserva
+        """
+        from datetime import timedelta
+        
+        with get_db_session() as session:
+            # ⚡ AGREGAR 10 MINUTOS DE LIMPIEZA AL RANGO SOLICITADO
+            fin_con_limpieza = fin_estimado + timedelta(minutes=10)
+            
+            print(f"\n[VERIFICAR_RESERVA_DISPONIBLE] Comprobando disponibilidad")
+            print(f"  Mesa {mesa_id}")
+            print(f"  Rango original: {inicio} - {fin_estimado}")
+            print(f"  Rango con limpieza: {inicio} - {fin_con_limpieza}")
+            
+            # Verificar SOLO reservas activas (estatus=1 Programada, 2 EnCurso)
+            # TAMBIÉN CONSIDERAR 10 MINUTOS DE LIMPIEZA
+            reservas_conflictivas = session.query(Reserva).filter(
+                and_(
+                    Reserva.estatus.in_([1, 2]),  # Programada o EnCurso
+                    or_(
+                        and_(Reserva.inicio <= inicio, (Reserva.fin_estimado + timedelta(minutes=10)) > inicio),
+                        and_(Reserva.inicio < fin_con_limpieza, (Reserva.fin_estimado + timedelta(minutes=10)) >= fin_con_limpieza),
+                        and_(Reserva.inicio >= inicio, (Reserva.fin_estimado + timedelta(minutes=10)) <= fin_con_limpieza)
+                    )
+                )
+            ).first()
+            
+            if reservas_conflictivas:
+                print(f"  ⚠️  Conflicto: Reserva activa encontrada (ID={reservas_conflictivas.id_reserva})")
+                print(f"     Reserva ocupa: {reservas_conflictivas.inicio} - {reservas_conflictivas.fin_estimado + timedelta(minutes=10)} (con limpieza)")
+                logger.warning(f"Mesa {mesa_id} tiene reserva activa en rango {inicio} - {fin_con_limpieza}")
+                return False
+            
+            print(f"  ✓ Disponible para reserva")
+            return True
+    
+    @staticmethod
     def crear_reserva(
         cliente_id: int,
         recepcionista_id: int,
@@ -28,10 +79,13 @@ class ReservaDAO:
         fin_estimado: datetime,
         tolerancia_min: int = None,
         notas: str = None,
-        hold_id: int = None
+        hold_id: int = None,
+        mesa_id: int = None
     ) -> dict:
         """
         Crear nueva reserva confirmada.
+        
+        ⚡ VALIDACIÓN: Verifica que no haya traslape con otras reservas activas.
         
         Las fechas (inicio, fin_estimado) llegan ya parseadas por Marshmallow
         en formato correcto de México (naive datetime en hora de México).
@@ -44,13 +98,28 @@ class ReservaDAO:
             tolerancia_min: Minutos de tolerancia para NoShow (NULL = usar config)
             notas: Notas adicionales
             hold_id: ID del hold si se origina desde hold
+            mesa_id: ID de la mesa (requerido para validar disponibilidad)
             
         Returns:
-            Dict serializado de la reserva
+            Dict serializado de la reserva, o None si hay error
         """
         schema = ReservaResponseSchema()
         
         with get_db_session() as session:
+            # VALIDACIÓN: Si hay mesa_id, verificar que no hay traslape con otras reservas
+            if mesa_id:
+                # Obtener la mesa_id del hold si no se proporcionó directamente
+                if not mesa_id and hold_id:
+                    hold = session.query(HoldMesa).filter(HoldMesa.id_hold_mesa == hold_id).first()
+                    if hold:
+                        mesa_id = hold.mesa_id
+                
+                # Si tenemos mesa_id, validar disponibilidad
+                if mesa_id:
+                    if not ReservaDAO.verificar_reserva_disponible(mesa_id, inicio, fin_estimado):
+                        logger.warning(f"No se puede crear reserva: traslape detectado en mesa {mesa_id}")
+                        return None
+            
             reserva = Reserva(
                 cliente_id=cliente_id,
                 recepcionista_id=recepcionista_id,

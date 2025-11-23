@@ -1,15 +1,20 @@
 """
 PedidoDAO - Data Access Object para operaciones.Pedido
-Gestión de pedidos vinculados a reservas
+Gestión de pedidos con creación, items, y cambio de estado
+Estados: 1=Creado, 2=Confirmado, 3=EnPreparacion, 4=Listo, 5=Entregado, 6=Cancelado
+Inventory descent happens ONLY when estado_pedido → 3 (EnPreparacion)
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
-from sqlalchemy import and_, or_
-from src.models.operaciones.pedido_model import Pedido
-from src.models.operaciones.pedido_item_model import PedidoItem
-from src.models.operaciones.pedido_estado_hist_model import PedidoEstadoHist
+from sqlalchemy import and_, or_, text
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from src.models.operaciones.pedido_model import Pedido, PedidoItem, PedidoEstadoHist
+from src.models.catalogos.producto_model import Producto
+from src.models.catalogos.combo_model import Combo
+from src.models.operaciones.reserva_model import Reserva
 from src.core.db.session_manager import get_db_session
+import uuid
 import logging
 
 logger = logging.getLogger(__name__)
@@ -21,33 +26,40 @@ class PedidoDAO:
     @staticmethod
     def crear_pedido(
         sucursal_id: int,
+        cliente_id: int,
+        tipo_pedido: int,
+        canal: int,
         reserva_id: int,
         inicia_usuario_id: int,
-        mesa_id: int,
-        folio: str,
-        cliente_id: int = None,
-        tipo_pedido: int = 1,
-        canal: int = 2,
+        mesa_id: int = None,
         notas: str = None
     ) -> dict:
         """
-        Crear nuevo pedido vinculado a reserva.
+        Crear nuevo pedido en estado 1=Creado (sin items aún)
         
         Args:
             sucursal_id: ID de sucursal
+            cliente_id: ID del cliente (OBLIGATORIO)
+            tipo_pedido: 1=Dine-in, 2=Takeaway
+            canal: 1=PWA, 2=Móvil, 3=Presencial
             reserva_id: ID de reserva (OBLIGATORIO)
-            inicia_usuario_id: ID usuario que inicia (cliente, mesero, etc)
-            mesa_id: ID de mesa
-            folio: Folio único del pedido
-            cliente_id: ID del cliente (opcional)
-            tipo_pedido: 1=Dine-in, 2=Pickup, 3=Delivery
-            canal: 1=Mesero, 2=Sistema, 3=App
+            inicia_usuario_id: ID usuario que inicia
+            mesa_id: ID de mesa (REQUERIDO si tipo_pedido=1, NULL si tipo_pedido=2)
             notas: Notas
             
         Returns:
-            Dict serializado del pedido
+            Dict: {id_pedido, folio, estado_pedido, created_at}
         """
-        with get_db_session() as session:
+        db = get_db()
+        try:
+            # Generar folio único
+            folio = f"PED{sucursal_id}{datetime.utcnow().strftime('%Y%m%d%H%M%S')}{str(uuid.uuid4())[:6].upper()}"
+            
+            # Validar reserva existe
+            reserva = db.session.query(Reserva).filter_by(id_reserva=reserva_id).first()
+            if not reserva:
+                raise ValueError(f"Reserva {reserva_id} no existe")
+            
             pedido = Pedido(
                 sucursal_id=sucursal_id,
                 folio=folio,
@@ -57,253 +69,350 @@ class PedidoDAO:
                 reserva_id=reserva_id,
                 mesa_id=mesa_id,
                 inicia_usuario_id=inicia_usuario_id,
-                estado_pedido=1,  # Abierto
+                estado_pedido=1,  # Creado
                 notas=notas
             )
-            session.add(pedido)
-            session.flush()  # Para obtener el ID
-            session.commit()
-            logger.info(f"Pedido creado: ID {pedido.id_pedido}, folio {folio}, reserva {reserva_id}")
-            return PedidoDAO._serializar_pedido(pedido)
+            
+            db.session.add(pedido)
+            db.session.flush()
+            
+            logger.info(f"Pedido {pedido.id_pedido} creado: folio {folio}, reserva {reserva_id}")
+            
+            return {
+                'id_pedido': pedido.id_pedido,
+                'folio': pedido.folio,
+                'estado_pedido': pedido.estado_pedido,
+                'created_at': pedido.created_at.isoformat()
+            }
+        
+        except IntegrityError as e:
+            db.session.rollback()
+            logger.error(f"Error de integridad al crear pedido: {str(e)}")
+            raise ValueError(f"Error al crear pedido: {str(e)}")
+        except Exception as e:
+            db.session.rollback()
+            logger.error(f"Error inesperado al crear pedido: {str(e)}")
+            raise
     
     
     @staticmethod
-    def obtener_pedido_por_id(pedido_id: int) -> dict:
+    def crear_pedido_item(
+        pedido_id: int,
+        producto_id: int = None,
+        combo_id: int = None,
+        cantidad: int = 1,
+        precio_unit: Decimal = None,
+        notas: str = None
+    ) -> dict:
         """
-        Obtener pedido por ID.
+        Agrega un item al pedido
         
         Args:
             pedido_id: ID del pedido
-            
-        Returns:
-            Dict del pedido con items o None
-        """
-        with get_db_session() as session:
-            pedido = session.query(Pedido).filter(
-                Pedido.id_pedido == pedido_id
-            ).first()
-            
-            if not pedido:
-                return None
-            
-            return PedidoDAO._serializar_pedido(pedido)
-    
-    
-    @staticmethod
-    def obtener_pedido_por_reserva(reserva_id: int) -> dict:
-        """
-        Obtener pedido vinculado a una reserva.
+            producto_id: ID del producto (si aplica)
+            combo_id: ID del combo (si aplica)
+            cantidad: Cantidad solicitada
+            precio_unit: Precio unitario (se obtiene automáticamente si es None)
+            notas: Notas del item
         
-        Args:
-            reserva_id: ID de reserva
-            
         Returns:
-            Dict del pedido o None
+            Dict: {id_pedido_item, producto_id, combo_id, cantidad, precio_unit}
         """
-        with get_db_session() as session:
-            pedido = session.query(Pedido).filter(
-                Pedido.reserva_id == reserva_id
-            ).first()
-            
+        db = get_db()
+        try:
+            pedido = db.session.query(Pedido).filter_by(id_pedido=pedido_id).first()
             if not pedido:
-                return None
+                raise ValueError(f"Pedido {pedido_id} no existe")
             
-            return PedidoDAO._serializar_pedido(pedido)
-    
-    
-    @staticmethod
-    def obtener_pedidos_por_sucursal(sucursal_id: int, estatus: int = None) -> list:
-        """
-        Obtener pedidos de una sucursal.
-        
-        Args:
-            sucursal_id: ID de sucursal
-            estatus: Filtrar por estado_pedido (opcional)
+            if pedido.estado_pedido != 1:
+                raise ValueError(f"Solo se pueden agregar items a pedidos en estado Creado (1)")
             
-        Returns:
-            Lista de pedidos
-        """
-        with get_db_session() as session:
-            query = session.query(Pedido).filter(
-                Pedido.sucursal_id == sucursal_id
+            # Obtener precio si no viene
+            if precio_unit is None:
+                if producto_id:
+                    prod = db.session.query(Producto).filter_by(id_producto=producto_id).first()
+                    if not prod:
+                        raise ValueError(f"Producto {producto_id} no existe")
+                    precio_unit = Decimal(str(prod.precio))
+                elif combo_id:
+                    combo = db.session.query(Combo).filter_by(id_combo=combo_id).first()
+                    if not combo:
+                        raise ValueError(f"Combo {combo_id} no existe")
+                    precio_unit = Decimal(str(combo.precio))
+                else:
+                    raise ValueError("Debe especificar producto_id o combo_id")
+            
+            item = PedidoItem(
+                pedido_id=pedido_id,
+                producto_id=producto_id,
+                combo_id=combo_id,
+                cantidad=cantidad,
+                precio_unit=precio_unit,
+                notas=notas
             )
             
-            if estatus:
-                query = query.filter(Pedido.estado_pedido == estatus)
+            db.session.add(item)
+            db.session.flush()
             
-            pedidos = query.order_by(Pedido.created_at.desc()).all()
-            return [PedidoDAO._serializar_pedido(p) for p in pedidos]
-    
-    
-    @staticmethod
-    def obtener_pedidos_cocina(sucursal_id: int) -> list:
-        """
-        Obtener pedidos con items en cocina.
+            logger.info(f"Item agregado a pedido {pedido_id}: producto={producto_id}, combo={combo_id}, cant={cantidad}")
+            
+            return {
+                'id_pedido_item': item.id_pedido_item,
+                'producto_id': item.producto_id,
+                'combo_id': item.combo_id,
+                'cantidad': item.cantidad,
+                'precio_unit': str(item.precio_unit)
+            }
         
-        Args:
-            sucursal_id: ID de sucursal
-            
-        Returns:
-            Lista de pedidos
-        """
-        with get_db_session() as session:
-            # Items que están en cocina (estatus=3)
-            items_cocina = session.query(PedidoItem).filter(
-                PedidoItem.estatus == 3  # En cocina
-            ).all()
-            
-            pedido_ids = list(set([item.pedido_id for item in items_cocina]))
-            
-            pedidos = session.query(Pedido).filter(
-                and_(
-                    Pedido.id_pedido.in_(pedido_ids),
-                    Pedido.sucursal_id == sucursal_id
-                )
-            ).all()
-            
-            return [PedidoDAO._serializar_pedido(p) for p in pedidos]
+        except Exception as e:
+            db.session.rollback()
+            logger.error(f"Error al crear item de pedido: {str(e)}")
+            raise
     
     
     @staticmethod
-    def cambiar_estatus_pedido(pedido_id: int, nuevo_estatus: int) -> dict:
+    def cambiar_estado_pedido(pedido_id: int, nuevo_estado: int, usuario_id: int = None, comentario: str = None) -> dict:
         """
-        Cambiar estatus de pedido.
+        Cambia el estado del pedido y registra en historial
+        
+        Transiciones válidas:
+            1 → 2, 6
+            2 → 3, 6
+            3 → 4, 6
+            4 → 5, 6
+            5 → 6
         
         Args:
             pedido_id: ID del pedido
-            nuevo_estatus: Nuevo estado (1=Abierto, 2=Enviado, 3=Entregado, 4=Cancelado, 5=Pagado)
-            
+            nuevo_estado: Nuevo estado
+            usuario_id: ID del usuario que realiza cambio
+            comentario: Comentario
+        
         Returns:
-            Dict actualizado o None
+            Dict: {id_pedido, estado_pedido, updated_at}
         """
-        with get_db_session() as session:
-            pedido = session.query(Pedido).filter(
-                Pedido.id_pedido == pedido_id
-            ).first()
+        db = get_db()
+        try:
+            pedido = db.session.query(Pedido).filter_by(id_pedido=pedido_id).first()
+            if not pedido:
+                raise ValueError(f"Pedido {pedido_id} no existe")
             
+            # Validar transición
+            estado_actual = pedido.estado_pedido
+            transiciones_validas = {
+                1: [2, 6],
+                2: [3, 6],
+                3: [4, 6],
+                4: [5, 6],
+                5: [6],
+                6: []
+            }
+            
+            if nuevo_estado not in transiciones_validas.get(estado_actual, []):
+                raise ValueError(
+                    f"Transición no válida: {estado_actual} → {nuevo_estado}"
+                )
+            
+            # Si estado=2 (Confirmado) no tiene items, rechazar
+            if nuevo_estado == 2:
+                items_count = db.session.query(PedidoItem).filter_by(pedido_id=pedido_id).count()
+                if items_count == 0:
+                    raise ValueError("Pedido debe tener al menos 1 item para confirmar")
+            
+            # Registrar histórico
+            hist = PedidoEstadoHist(
+                pedido_id=pedido_id,
+                estado_pedido=nuevo_estado,
+                usuario_id=usuario_id,
+                comentario=comentario
+            )
+            
+            # Actualizar estado
+            pedido.estado_pedido = nuevo_estado
+            pedido.updated_at = datetime.utcnow()
+            
+            db.session.add(hist)
+            db.session.flush()
+            
+            logger.info(f"Pedido {pedido_id} cambió de estado {estado_actual} → {nuevo_estado}")
+            
+            return {
+                'id_pedido': pedido_id,
+                'estado_pedido': nuevo_estado,
+                'updated_at': pedido.updated_at.isoformat()
+            }
+        
+        except Exception as e:
+            db.session.rollback()
+            logger.error(f"Error al cambiar estado: {str(e)}")
+            raise
+    
+    
+    @staticmethod
+    def obtener_pedido_completo(pedido_id: int) -> dict:
+        """
+        Obtiene pedido con items e histórico de cambios
+        
+        Returns:
+            Dict con pedido completo o None
+        """
+        db = get_db()
+        try:
+            pedido = db.session.query(Pedido).filter_by(id_pedido=pedido_id).first()
             if not pedido:
                 return None
             
-            pedido.estado_pedido = nuevo_estatus
-            pedido.updated_at = datetime.now()
-            session.commit()
-            logger.info(f"Pedido {pedido_id} cambió a estatus {nuevo_estatus}")
-            return PedidoDAO._serializar_pedido(pedido)
+            items = db.session.query(PedidoItem).filter_by(pedido_id=pedido_id).all()
+            historico = db.session.query(PedidoEstadoHist).filter_by(pedido_id=pedido_id).all()
+            
+            return {
+                'id_pedido': pedido.id_pedido,
+                'sucursal_id': pedido.sucursal_id,
+                'folio': pedido.folio,
+                'cliente_id': pedido.cliente_id,
+                'tipo_pedido': pedido.tipo_pedido,
+                'canal': pedido.canal,
+                'reserva_id': pedido.reserva_id,
+                'mesa_id': pedido.mesa_id,
+                'inicia_usuario_id': pedido.inicia_usuario_id,
+                'estado_pedido': pedido.estado_pedido,
+                'notas': pedido.notas,
+                'created_at': pedido.created_at.isoformat() if pedido.created_at else None,
+                'updated_at': pedido.updated_at.isoformat() if pedido.updated_at else None,
+                'items': [
+                    {
+                        'id_pedido_item': item.id_pedido_item,
+                        'producto_id': item.producto_id,
+                        'combo_id': item.combo_id,
+                        'cantidad': item.cantidad,
+                        'precio_unit': str(item.precio_unit),
+                        'notas': item.notas,
+                        'created_at': item.created_at.isoformat() if item.created_at else None
+                    }
+                    for item in items
+                ],
+                'historico': [
+                    {
+                        'id_pedido_estado_hist': h.id_pedido_estado_hist,
+                        'estado_pedido': h.estado_pedido,
+                        'usuario_id': h.usuario_id,
+                        'created_at': h.created_at.isoformat() if h.created_at else None,
+                        'comentario': h.comentario
+                    }
+                    for h in historico
+                ]
+            }
+        
+        except Exception as e:
+            logger.error(f"Error al obtener pedido: {str(e)}")
+            raise
     
     
     @staticmethod
-    def obtener_total_pedido(pedido_id: int) -> Decimal:
+    def listar_pedidos_por_sucursal(sucursal_id: int, fecha_desde=None, fecha_hasta=None, 
+                                     estado=None, offset=0, limit=50):
         """
-        Obtener total de un pedido (suma de items confirmados).
+        Lista pedidos de una sucursal con filtros opcionales
         
-        Args:
-            pedido_id: ID del pedido
-            
         Returns:
-            Total en Decimal
+            tuple: (lista de pedidos, total)
         """
-        with get_db_session() as session:
-            items = session.query(PedidoItem).filter(
+        db = get_db()
+        try:
+            query = db.session.query(Pedido).filter_by(sucursal_id=sucursal_id)
+            
+            if fecha_desde:
+                query = query.filter(Pedido.created_at >= fecha_desde)
+            if fecha_hasta:
+                query = query.filter(Pedido.created_at <= fecha_hasta)
+            if estado:
+                query = query.filter(Pedido.estado_pedido == estado)
+            
+            total = query.count()
+            
+            pedidos = query.order_by(Pedido.created_at.desc()).offset(offset).limit(limit).all()
+            
+            return (
+                [
+                    {
+                        'id_pedido': p.id_pedido,
+                        'folio': p.folio,
+                        'cliente_id': p.cliente_id,
+                        'tipo_pedido': p.tipo_pedido,
+                        'canal': p.canal,
+                        'mesa_id': p.mesa_id,
+                        'estado_pedido': p.estado_pedido,
+                        'created_at': p.created_at.isoformat() if p.created_at else None
+                    }
+                    for p in pedidos
+                ],
+                total
+            )
+        
+        except Exception as e:
+            logger.error(f"Error al listar pedidos: {str(e)}")
+            raise
+    
+    
+    @staticmethod
+    def obtener_pedidos_por_estado(sucursal_id: int, estado: int):
+        """Obtiene todos los pedidos de una sucursal en un estado específico"""
+        db = get_db()
+        try:
+            pedidos = db.session.query(Pedido).filter(
                 and_(
-                    PedidoItem.pedido_id == pedido_id,
-                    PedidoItem.estatus >= 3  # Items confirmados/en cocina/listos
+                    Pedido.sucursal_id == sucursal_id,
+                    Pedido.estado_pedido == estado
                 )
-            ).all()
+            ).order_by(Pedido.created_at.desc()).all()
+            
+            return [
+                {
+                    'id_pedido': p.id_pedido,
+                    'folio': p.folio,
+                    'cliente_id': p.cliente_id,
+                    'mesa_id': p.mesa_id,
+                    'estado_pedido': p.estado_pedido,
+                    'created_at': p.created_at.isoformat() if p.created_at else None
+                }
+                for p in pedidos
+            ]
+        except Exception as e:
+            logger.error(f"Error al obtener pedidos por estado: {str(e)}")
+            raise
+    
+    
+    @staticmethod
+    def calcular_total_pedido(pedido_id: int) -> Decimal:
+        """
+        Calcula el total de un pedido (suma de items * cantidad * precio)
+        
+        Returns:
+            Decimal: Total del pedido
+        """
+        db = get_db()
+        try:
+            items = db.session.query(PedidoItem).filter_by(pedido_id=pedido_id).all()
             
             total = Decimal('0.00')
             for item in items:
                 total += Decimal(str(item.precio_unit)) * Decimal(str(item.cantidad))
             
             return total
-    
-    
-    @staticmethod
-    def registrar_cambio_estatus(pedido_id: int, estatus: int, usuario_id: int = None, comentario: str = None) -> dict:
-        """
-        Registrar cambio de estatus en historial.
         
-        Args:
-            pedido_id: ID del pedido
-            estatus: Nuevo estatus
-            usuario_id: ID del usuario que hace cambio
-            comentario: Comentario opcional
-            
-        Returns:
-            Dict del registro de historial
-        """
-        with get_db_session() as session:
-            hist = PedidoEstadoHist(
-                pedido_id=pedido_id,
-                estado_pedido=estatus,
-                usuario_id=usuario_id,
-                comentario=comentario
-            )
-            session.add(hist)
-            session.commit()
-            logger.info(f"Cambio de estatus registrado: Pedido {pedido_id} → {estatus}")
-            
-            return {
-                'id_pedido_estado_hist': hist.id_pedido_estado_hist,
-                'pedido_id': hist.pedido_id,
-                'estado_pedido': hist.estado_pedido,
-                'usuario_id': hist.usuario_id,
-                'created_at': hist.created_at.isoformat() if hist.created_at else None,
-                'comentario': hist.comentario
-            }
+        except Exception as e:
+            logger.error(f"Error al calcular total: {str(e)}")
+            raise
     
     
     @staticmethod
     def pedido_existe(pedido_id: int) -> bool:
-        """
-        Verificar si un pedido existe.
-        
-        Args:
-            pedido_id: ID del pedido
-            
-        Returns:
-            True si existe
-        """
-        with get_db_session() as session:
-            existe = session.query(Pedido).filter(
-                Pedido.id_pedido == pedido_id
-            ).first()
-            return existe is not None
-    
-    
-    @staticmethod
-    def _serializar_pedido(pedido) -> dict:
-        """Helper para serializar pedido con items"""
-        if not pedido:
-            return None
-        
-        items = [
-            {
-                'id_pedido_item': item.id_pedido_item,
-                'pedido_id': item.pedido_id,
-                'producto_id': item.producto_id,
-                'combo_id': item.combo_id,
-                'cantidad': item.cantidad,
-                'precio_unit': float(item.precio_unit),
-                'estatus': item.estatus,
-                'notas': item.notas,
-                'created_at': item.created_at.isoformat() if item.created_at else None
-            }
-            for item in pedido.pedido_items
-        ]
-        
-        return {
-            'id_pedido': pedido.id_pedido,
-            'sucursal_id': pedido.sucursal_id,
-            'folio': pedido.folio,
-            'cliente_id': pedido.cliente_id,
-            'tipo_pedido': pedido.tipo_pedido,
-            'canal': pedido.canal,
-            'reserva_id': pedido.reserva_id,
-            'mesa_id': pedido.mesa_id,
-            'inicia_usuario_id': pedido.inicia_usuario_id,
-            'estado_pedido': pedido.estado_pedido,
-            'notas': pedido.notas,
-            'items': items,
-            'created_at': pedido.created_at.isoformat() if pedido.created_at else None,
-            'updated_at': pedido.updated_at.isoformat() if pedido.updated_at else None
-        }
+        """Verifica si un pedido existe"""
+        db = get_db()
+        try:
+            existe = db.session.query(Pedido).filter_by(id_pedido=pedido_id).first() is not None
+            return existe
+        except Exception as e:
+            logger.error(f"Error al verificar existencia de pedido: {str(e)}")
+            return False
+

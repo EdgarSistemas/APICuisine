@@ -99,71 +99,72 @@ class HoldMesaDAO:
     def verificar_mesa_disponible(mesa_id: int, inicio: datetime, fin_estimado: datetime) -> bool:
         """
         Verificar si una mesa está disponible en el rango de fechas.
+        
+        ⚡ IMPORTANTE: Suma 10 minutos de limpieza automáticamente a fin_estimado
+        para evitar que se sobrepongan reservas.
+        
         Verifica:
         - No hay holds activos que se traslapen
         - No hay reservas programadas/en_curso que se traslapen
+        - Incluye 10 minutos de limpieza después de cada reserva/hold
         
         NOTA: Todas las fechas están en zona de México.
         
         Args:
             mesa_id: ID de la mesa
             inicio: Fecha/hora inicio deseada
-            fin_estimado: Fecha/hora fin estimado
+            fin_estimado: Fecha/hora fin estimado (se agregan 10 min de limpieza)
             
         Returns:
             True si está disponible, False si hay conflicto
         """
+        from datetime import timedelta
+        
         with get_db_session() as session:
             # Obtener hora actual en zona de México
             ahora_mexico = datetime.now(TZ_MEXICO).replace(tzinfo=None)
             
+            # ⚡ AGREGAR 10 MINUTOS DE LIMPIEZA AL RANGO SOLICITADO
+            fin_con_limpieza = fin_estimado + timedelta(minutes=10)
+            
             print(f"\n[VERIFICAR_DISPONIBLE] Comprobando disponibilidad")
-            print(f"  Mesa {mesa_id}, Rango: {inicio} - {fin_estimado}")
+            print(f"  Mesa {mesa_id}")
+            print(f"  Rango original: {inicio} - {fin_estimado}")
+            print(f"  Rango con limpieza: {inicio} - {fin_con_limpieza}")
             print(f"  Ahora (México): {ahora_mexico}")
             
             # Verificar holds activos (estatus=1) que no hayan expirado
+            # ⚡ IMPORTANTE: VALIDA SOLO QUE NO HAYA OTRO HOLD ACTIVO
+            # NO importa si tiene reserva o no - un hold activo bloquea
+            # TAMBIÉN CONSIDERAR 10 MINUTOS DE LIMPIEZA EN LOS HOLDS EXISTENTES
+            
             holds_activos = session.query(HoldMesa).filter(
                 and_(
                     HoldMesa.mesa_id == mesa_id,
-                    HoldMesa.estatus == 1,  # Activo
+                    HoldMesa.estatus == 1,  # Activo (sin importar si tiene reserva)
                     HoldMesa.expires_at > ahora_mexico,  # No expirado (zona México)
-                    or_(
-                        # Traslape: nuevo inicio está dentro de hold existente
-                        and_(HoldMesa.inicio <= inicio, HoldMesa.fin_estimado > inicio),
-                        # Traslape: nuevo fin está dentro de hold existente
-                        and_(HoldMesa.inicio < fin_estimado, HoldMesa.fin_estimado >= fin_estimado),
-                        # Traslape: nuevo rango contiene completamente el hold existente
-                        and_(HoldMesa.inicio >= inicio, HoldMesa.fin_estimado <= fin_estimado)
-                    )
                 )
-            ).first()
+            ).all()
             
-            if holds_activos:
-                print(f"  ⚠️  Conflicto: Hold activo encontrado (ID={holds_activos.id_hold_mesa})")
-                logger.warning(f"Mesa {mesa_id} tiene hold activo en rango {inicio} - {fin_estimado}")
-                return False
-            
-            # IMPORTANTE: También verificar reservas confirmadas
-            # Importamos aquí para evitar circular import
-            from src.models.operaciones.reserva_model import Reserva
-            
-            reservas_activas = session.query(Reserva).filter(
-                # Filtrar por mesa_id una vez que agregues relación
-                # Por ahora filtramos por estatus
-                and_(
-                    Reserva.estatus.in_([1, 2]),  # Programada o EnCurso
-                    or_(
-                        and_(Reserva.inicio <= inicio, Reserva.fin_estimado > inicio),
-                        and_(Reserva.inicio < fin_estimado, Reserva.fin_estimado >= fin_estimado),
-                        and_(Reserva.inicio >= inicio, Reserva.fin_estimado <= fin_estimado)
-                    )
-                )
-            ).first()
-            
-            if reservas_activas:
-                print(f"  ⚠️  Conflicto: Reserva activa encontrada (ID={reservas_activas.id_reserva})")
-                logger.warning(f"Mesa {mesa_id} tiene reserva activa en rango {inicio} - {fin_estimado}")
-                return False
+            # Procesar en Python para evitar problemas con SQL Server
+            for hold in holds_activos:
+                hold_fin_con_limpieza = hold.fin_estimado + timedelta(minutes=10)
+                
+                # Verificar si hay traslape
+                if (
+                    # Traslape: nuevo inicio está dentro de hold existente (+ 10 min limpieza)
+                    (hold.inicio <= inicio < hold_fin_con_limpieza) or
+                    # Traslape: nuevo fin está dentro de hold existente (+ 10 min limpieza)
+                    (hold.inicio < fin_con_limpieza <= hold_fin_con_limpieza) or
+                    # Traslape: nuevo rango contiene completamente el hold existente (+ 10 min limpieza)
+                    (inicio <= hold.inicio and hold_fin_con_limpieza <= fin_con_limpieza) or
+                    # Traslape: hold contiene completamente el nuevo rango
+                    (hold.inicio <= inicio and fin_con_limpieza <= hold_fin_con_limpieza)
+                ):
+                    print(f"  ⚠️  Conflicto: Hold activo encontrado (ID={hold.id_hold_mesa})")
+                    print(f"     Hold ocupa: {hold.inicio} - {hold_fin_con_limpieza} (con limpieza)")
+                    logger.warning(f"Mesa {mesa_id} tiene hold activo en rango {inicio} - {fin_con_limpieza}")
+                    return False
             
             print(f"  ✓ Mesa disponible")
             return True
