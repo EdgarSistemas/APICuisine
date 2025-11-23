@@ -149,6 +149,191 @@ class MesaDAO:
     
     
     @staticmethod
+    def obtener_mesa_con_estatus(mesa_id: int) -> dict:
+        """
+        Obtener mesa por ID con estatus actual.
+        
+        Retorna además del mesa, el estatus actual:
+        - 1 = Disponible
+        - 2 = Ocupada
+        - 3 = En Limpieza
+        - 4 = Fuera de Servicio
+        
+        Args:
+            mesa_id: ID de la mesa
+            
+        Returns:
+            Dict con mesa + estatus_actual, o None
+        """
+        from src.models.catalogos.mesa_estatus_model import MesaEstatus
+        
+        schema = MesaResponseSchema()
+        with get_db_session() as session:
+            mesa = session.query(Mesa).filter(Mesa.id_mesa == mesa_id).first()
+            if not mesa:
+                return None
+            
+            # Obtener estatus actual
+            estatus_map = {1: "Disponible", 2: "Ocupada", 3: "En Limpieza", 4: "Fuera de Servicio"}
+            mesa_estatus = session.query(MesaEstatus).filter(
+                MesaEstatus.mesa_id == mesa_id
+            ).first()
+            
+            # Serializar mesa
+            mesa_dict = schema.dump(mesa)
+            
+            # Agregar estatus
+            if mesa_estatus:
+                mesa_dict['estatus_actual'] = mesa_estatus.estatus
+                mesa_dict['estatus_display'] = estatus_map.get(mesa_estatus.estatus, "Desconocido")
+            else:
+                # Si no hay registro en MesaEstatus, asumir disponible
+                mesa_dict['estatus_actual'] = 1
+                mesa_dict['estatus_display'] = "Disponible"
+            
+            return mesa_dict
+    
+    
+    @staticmethod
+    def obtener_mesas_por_area_con_estatus(area_id: int, solo_activas: bool = True) -> list:
+        """
+        Obtener todas las mesas de un área CON ESTATUS ACTUAL.
+        
+        Args:
+            area_id: ID del área
+            solo_activas: Si True, solo mesas activas
+            
+        Returns:
+            Lista de dicts con mesa + estatus_actual
+        """
+        from src.models.catalogos.mesa_estatus_model import MesaEstatus
+        
+        schema = MesaResponseSchema()
+        estatus_map = {1: "Disponible", 2: "Ocupada", 3: "En Limpieza", 4: "Fuera de Servicio"}
+        
+        with get_db_session() as session:
+            # LEFT JOIN con MesaEstatus para incluir estatus
+            query = session.query(Mesa).filter(Mesa.area_id == area_id)
+            
+            if solo_activas:
+                query = query.filter(Mesa.es_activa == True)
+            
+            mesas = query.order_by(Mesa.codigo_mesa).all()
+            
+            # Enriquecer con estatus
+            result = []
+            for mesa in mesas:
+                mesa_dict = schema.dump(mesa)
+                
+                mesa_estatus = session.query(MesaEstatus).filter(
+                    MesaEstatus.mesa_id == mesa.id_mesa
+                ).first()
+                
+                if mesa_estatus:
+                    mesa_dict['estatus_actual'] = mesa_estatus.estatus
+                    mesa_dict['estatus_display'] = estatus_map.get(mesa_estatus.estatus, "Desconocido")
+                else:
+                    mesa_dict['estatus_actual'] = 1
+                    mesa_dict['estatus_display'] = "Disponible"
+                
+                result.append(mesa_dict)
+            
+            return result
+    
+    
+    @staticmethod
+    def obtener_mesas_por_sucursal_con_estatus(sucursal_id: int, solo_activas: bool = True) -> list:
+        """
+        Obtener todas las mesas de una sucursal CON ESTATUS ACTUAL.
+        
+        Args:
+            sucursal_id: ID de la sucursal
+            solo_activas: Si True, solo mesas activas
+            
+        Returns:
+            Lista de dicts con mesa + estatus_actual
+        """
+        from src.models.catalogos.mesa_estatus_model import MesaEstatus
+        
+        schema = MesaResponseSchema()
+        estatus_map = {1: "Disponible", 2: "Ocupada", 3: "En Limpieza", 4: "Fuera de Servicio"}
+        
+        with get_db_session() as session:
+            # JOIN Mesa con Area, luego filtrar por sucursal_id
+            query = session.query(Mesa).join(Area).filter(Area.sucursal_id == sucursal_id)
+            
+            if solo_activas:
+                query = query.filter(Mesa.es_activa == True)
+            
+            mesas = query.order_by(Area.nombre, Mesa.codigo_mesa).all()
+            
+            # Enriquecer con estatus
+            result = []
+            for mesa in mesas:
+                mesa_dict = schema.dump(mesa)
+                
+                mesa_estatus = session.query(MesaEstatus).filter(
+                    MesaEstatus.mesa_id == mesa.id_mesa
+                ).first()
+                
+                if mesa_estatus:
+                    mesa_dict['estatus_actual'] = mesa_estatus.estatus
+                    mesa_dict['estatus_display'] = estatus_map.get(mesa_estatus.estatus, "Desconocido")
+                else:
+                    mesa_dict['estatus_actual'] = 1
+                    mesa_dict['estatus_display'] = "Disponible"
+                
+                result.append(mesa_dict)
+            
+            return result
+    
+    
+    @staticmethod
+    def obtener_todas_las_mesas_con_estatus(solo_activas: bool = True) -> list:
+        """
+        Obtener TODAS las mesas (solo para ADMIN) CON ESTATUS ACTUAL.
+        
+        Args:
+            solo_activas: Si True, solo mesas activas
+            
+        Returns:
+            Lista de dicts con mesa + estatus_actual
+        """
+        from src.models.catalogos.mesa_estatus_model import MesaEstatus
+        
+        schema = MesaResponseSchema()
+        estatus_map = {1: "Disponible", 2: "Ocupada", 3: "En Limpieza", 4: "Fuera de Servicio"}
+        
+        with get_db_session() as session:
+            query = session.query(Mesa).join(Area)
+            
+            if solo_activas:
+                query = query.filter(Mesa.es_activa == True)
+            
+            mesas = query.order_by(Area.sucursal_id, Area.nombre, Mesa.codigo_mesa).all()
+            
+            # Enriquecer con estatus
+            result = []
+            for mesa in mesas:
+                mesa_dict = schema.dump(mesa)
+                
+                mesa_estatus = session.query(MesaEstatus).filter(
+                    MesaEstatus.mesa_id == mesa.id_mesa
+                ).first()
+                
+                if mesa_estatus:
+                    mesa_dict['estatus_actual'] = mesa_estatus.estatus
+                    mesa_dict['estatus_display'] = estatus_map.get(mesa_estatus.estatus, "Desconocido")
+                else:
+                    mesa_dict['estatus_actual'] = 1
+                    mesa_dict['estatus_display'] = "Disponible"
+                
+                result.append(mesa_dict)
+            
+            return result
+    
+    
+    @staticmethod
     def actualizar_mesa(mesa_id: int, capacidad: int = None, es_activa: bool = None) -> dict:
         """
         Actualizar campos de una mesa.

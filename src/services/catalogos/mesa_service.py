@@ -72,28 +72,30 @@ class MesaService:
         - ADMIN: puede ver todas las mesas (si sucursal_id=None) o de una sucursal
         - EMPLOYEE: ve solo las mesas de sus sucursales
         
+        AHORA INCLUYE: estatus_actual y estatus_display para cada mesa
+        
         Args:
             usuario_id: ID del usuario que consulta
             area_id: Filtro por área (opcional)
             sucursal_id: Filtro por sucursal (opcional)
             
         Returns:
-            {success: bool, data: [Mesa dicts], total: int}
+            {success: bool, data: [Mesa dicts con estatus], total: int}
         """
         try:
             mesas = []
             
             # Si se filtra por area_id, obtener de esa área
             if area_id:
-                mesas = MesaDAO.obtener_mesas_por_area(area_id, solo_activas=True)
+                mesas = MesaDAO.obtener_mesas_por_area_con_estatus(area_id, solo_activas=True)
             
             # Si se filtra por sucursal_id, obtener de esa sucursal
             elif sucursal_id:
-                mesas = MesaDAO.obtener_mesas_por_sucursal(sucursal_id, solo_activas=True)
+                mesas = MesaDAO.obtener_mesas_por_sucursal_con_estatus(sucursal_id, solo_activas=True)
             
             # Si es ADMIN y no hay filtros, obtener todas
             elif es_admin(usuario_id):
-                mesas = MesaDAO.obtener_todas_las_mesas(solo_activas=True)
+                mesas = MesaDAO.obtener_todas_las_mesas_con_estatus(solo_activas=True)
             
             # Si es EMPLOYEE, obtener de sus sucursales
             else:
@@ -104,7 +106,7 @@ class MesaService:
                 
                 # Para cada sucursal, obtener mesas
                 for suc_id in sucursales_usuario:
-                    mesas_suc = MesaDAO.obtener_mesas_por_sucursal(suc_id, solo_activas=True)
+                    mesas_suc = MesaDAO.obtener_mesas_por_sucursal_con_estatus(suc_id, solo_activas=True)
                     mesas.extend(mesas_suc)
             
             logger.info(f"Usuario {usuario_id} consultó mesas: {len(mesas)} resultados")
@@ -124,15 +126,17 @@ class MesaService:
         """
         Obtener una mesa específica con validación de acceso.
         
+        AHORA INCLUYE: estatus_actual y estatus_display
+        
         Args:
             usuario_id: ID del usuario que consulta
             mesa_id: ID de la mesa
             
         Returns:
-            {success: bool, data?: Mesa dict, error?: str}
+            {success: bool, data?: Mesa dict con estatus, error?: str}
         """
         try:
-            mesa = MesaDAO.obtener_mesa_por_id(mesa_id)
+            mesa = MesaDAO.obtener_mesa_con_estatus(mesa_id)
             
             if not mesa:
                 logger.warning(f"Mesa {mesa_id} no encontrada")

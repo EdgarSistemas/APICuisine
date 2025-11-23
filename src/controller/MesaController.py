@@ -134,7 +134,63 @@ def listar_mesas():
         description: Buscar por código de mesa
     responses:
       200:
-        description: Lista de mesas
+        description: Lista de mesas obtenida exitosamente
+        schema:
+          type: object
+          properties:
+            success:
+              type: boolean
+              example: true
+            data:
+              type: array
+              items:
+                type: object
+                properties:
+                  id_mesa:
+                    type: integer
+                    example: 5
+                  area_id:
+                    type: integer
+                    example: 1
+                  codigo_mesa:
+                    type: string
+                    example: "MES-20251122143000"
+                  capacidad:
+                    type: integer
+                    example: 4
+                  es_activa:
+                    type: boolean
+                    example: true
+                  estatus_actual:
+                    type: integer
+                    example: 1
+                    description: "Estado actual de la mesa: 1=Disponible, 2=Ocupada, 3=En Limpieza, 4=Fuera Servicio"
+                  estatus_display:
+                    type: string
+                    example: "Disponible"
+                    description: "Nombre legible del estado"
+                  created_at:
+                    type: string
+                    format: date-time
+                    example: "2025-11-20 10:30:00"
+                  updated_at:
+                    type: string
+                    format: date-time
+                    example: "2025-11-22 14:30:00"
+            total:
+              type: integer
+              example: 5
+            filtros:
+              type: object
+              properties:
+                area_id:
+                  type: integer
+                sucursal_id:
+                  type: integer
+                solo_activas:
+                  type: boolean
+                busqueda:
+                  type: string
       400:
         description: Parámetros inválidos
     """
@@ -203,7 +259,47 @@ def obtener_mesa(id_mesa):
         type: integer
     responses:
       200:
-        description: Mesa encontrada
+        description: Mesa encontrada exitosamente
+        schema:
+          type: object
+          properties:
+            success:
+              type: boolean
+              example: true
+            data:
+              type: object
+              properties:
+                id_mesa:
+                  type: integer
+                  example: 5
+                area_id:
+                  type: integer
+                  example: 1
+                codigo_mesa:
+                  type: string
+                  example: "MES-20251122143000"
+                capacidad:
+                  type: integer
+                  example: 4
+                es_activa:
+                  type: boolean
+                  example: true
+                estatus_actual:
+                  type: integer
+                  example: 1
+                  description: "Estado actual: 1=Disponible, 2=Ocupada, 3=En Limpieza, 4=Fuera Servicio"
+                estatus_display:
+                  type: string
+                  example: "Disponible"
+                  description: "Nombre legible del estado"
+                created_at:
+                  type: string
+                  format: date-time
+                  example: "2025-11-20 10:30:00"
+                updated_at:
+                  type: string
+                  format: date-time
+                  example: "2025-11-22 14:30:00"
       404:
         description: Mesa no encontrada
       403:

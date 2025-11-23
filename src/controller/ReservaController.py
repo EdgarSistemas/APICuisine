@@ -347,15 +347,15 @@ def listar_reservas():
       - in: query
         name: fecha_desde
         type: string
-        format: 2025-11-19 14:00:00
+        format: "yyyy-mm-dd hh:mm:ss"
         required: false
-        description: "Reservas desde esta fecha (ISO 8601, opcional). Ej: ?fecha_desde=2025-11-18T00:00:00"
+        description: "Inicio del rango de fechas (formato: yyyy-mm-dd hh:mm:ss, zona horaria: América/México_City). Retorna reservas que se solapan con este rango (opcional). Ej: ?fecha_desde=2025-11-18%2000:00:00"
       - in: query
         name: fecha_hasta
         type: string
-        format: 2025-11-19 14:00:00
+        format: "yyyy-mm-dd hh:mm:ss"
         required: false
-        description: "Reservas hasta esta fecha (ISO 8601, opcional). Ej: ?fecha_hasta=2025-11-18T23:59:59"
+        description: "Fin del rango de fechas (formato: yyyy-mm-dd hh:mm:ss, zona horaria: América/México_City). Retorna reservas que se solapan con este rango (opcional). Ej: ?fecha_hasta=2025-11-18%2023:59:59"
     responses:
       200:
         description: "Lista de reservas obtenida exitosamente"
@@ -443,8 +443,12 @@ def listar_reservas():
           curl -X GET "http://localhost:5000/api/reservas/?sucursal_id=1&cliente_id=1&estatus=1" \\
             -H "Authorization: Bearer YOUR_JWT_TOKEN"
 
+          # Listar reservas activas (estatus=2) del cliente 2, sucursal 4, entre 12:00 y 17:45
+          curl -X GET "http://localhost:5000/api/reservas/?sucursal_id=4&cliente_id=2&estatus=2&fecha_desde=2025-11-22%2012:00:00&fecha_hasta=2025-11-22%2017:45:00" \\
+            -H "Authorization: Bearer YOUR_JWT_TOKEN"
+
           # Listar reservas de una fecha específica en sucursal 1
-          curl -X GET "http://localhost:5000/api/reservas/?sucursal_id=1&fecha_desde=2025-11-18T00:00:00&fecha_hasta=2025-11-18T23:59:59" \\
+          curl -X GET "http://localhost:5000/api/reservas/?sucursal_id=1&fecha_desde=2025-11-22%2000:00:00&fecha_hasta=2025-11-22%2023:59:59" \\
             -H "Authorization: Bearer YOUR_JWT_TOKEN"
     """
     try:

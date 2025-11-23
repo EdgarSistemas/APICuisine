@@ -181,5 +181,5 @@ class ReservaListarQuerySchema(Schema):
     sucursal_id = fields.Int(required=False, allow_none=True)
     cliente_id = fields.Int(required=False, allow_none=True)
     estatus = fields.Int(required=False, allow_none=True)
-    fecha_desde = fields.DateTime(required=False, allow_none=True, format='%Y-%m-%d %H:%M:%S')
-    fecha_hasta = fields.DateTime(required=False, allow_none=True, format='%Y-%m-%d %H:%M:%S')
+    fecha_desde = fields.DateTime(required=False, allow_none=True, format='iso')
+    fecha_hasta = fields.DateTime(required=False, allow_none=True, format='iso')

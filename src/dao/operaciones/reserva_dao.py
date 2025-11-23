@@ -96,36 +96,40 @@ class ReservaDAO:
         Listar reservas con filtros opcionales.
         
         Filtros sobre fechas:
-        - fecha_desde: reservas donde inicio >= fecha_desde
-        - fecha_hasta: reservas donde fin_estimado <= fecha_hasta
+        - fecha_desde + fecha_hasta: retorna reservas que se solapan con el rango (inicio <= fecha_hasta AND fin_estimado >= fecha_desde)
+        - solo fecha_desde: retorna reservas que NO han terminado antes (fin_estimado >= fecha_desde)
+        - solo fecha_hasta: retorna reservas que NO comienzan después (inicio <= fecha_hasta)
         
-        Para filtrar por sucursal_id, se hace JOIN con HoldMesa y Mesa
+        Para filtrar por sucursal_id, se hace JOIN: Reserva -> HoldMesa -> Mesa -> Area -> sucursal_id
         
         Args:
-            sucursal_id: Filtrar por sucursal (a través de hold_id -> mesa -> sucursal)
+            sucursal_id: Filtrar por sucursal (a través de hold_id -> mesa -> area -> sucursal)
             cliente_id: Filtrar por cliente
             estatus: Filtrar por estatus
-            fecha_desde: Filtrar desde fecha (aplica a 'inicio')
-            fecha_hasta: Filtrar hasta fecha (aplica a 'fin_estimado')
+            fecha_desde: Inicio del rango de fechas (opcional)
+            fecha_hasta: Fin del rango de fechas (opcional)
             
         Returns:
             Lista de dicts de reservas
         """
         from src.models.operaciones.hold_mesa_model import HoldMesa
         from src.models.catalogos.mesa_model import Mesa
+        from src.models.catalogos.area_model import Area
         
         schema = ReservaResponseSchema()
         with get_db_session() as session:
             query = session.query(Reserva)
             
-            # Si busca por sucursal, hacer JOIN con HoldMesa y Mesa
+            # Si busca por sucursal, hacer JOIN con HoldMesa, Mesa y Area
             if sucursal_id:
                 query = query.join(
                     HoldMesa, Reserva.hold_id == HoldMesa.id_hold_mesa
                 ).join(
                     Mesa, HoldMesa.mesa_id == Mesa.id_mesa
+                ).join(
+                    Area, Mesa.area_id == Area.id_area
                 ).filter(
-                    Mesa.sucursal_id == sucursal_id
+                    Area.sucursal_id == sucursal_id
                 )
             
             if cliente_id:
@@ -134,12 +138,19 @@ class ReservaDAO:
             if estatus:
                 query = query.filter(Reserva.estatus == estatus)
             
-            # Filtrar por rango de fechas usando inicio y fin_estimado
-            if fecha_desde:
-                query = query.filter(Reserva.inicio >= fecha_desde)
-            
-            if fecha_hasta:
-                query = query.filter(Reserva.fin_estimado <= fecha_hasta)
+            # Filtrar por rango de fechas: reservas que se solapan con el período consultado
+            # Una reserva se solapa si: inicio < fecha_hasta AND fin_estimado > fecha_desde
+            if fecha_desde and fecha_hasta:
+                query = query.filter(
+                    Reserva.inicio <= fecha_hasta,
+                    Reserva.fin_estimado >= fecha_desde
+                )
+            elif fecha_desde:
+                # Si solo hay fecha_desde, mostrar reservas que NO han terminado antes
+                query = query.filter(Reserva.fin_estimado >= fecha_desde)
+            elif fecha_hasta:
+                # Si solo hay fecha_hasta, mostrar reservas que NO comienzan después
+                query = query.filter(Reserva.inicio <= fecha_hasta)
             
             reservas = query.order_by(Reserva.inicio.asc()).all()
             return [schema.dump(r) for r in reservas]
@@ -485,6 +496,7 @@ class ReservaDAO:
         - Busca reservas con estatus=1 (Programada)
         - Verifica si ahora > (inicio + tolerancia_min)
         - Cambia estatus a 4 (NoShow) automáticamente
+        - LIBERA LA MESA: la devuelve a Disponible (estatus=1)
         
         IMPORTANTE: 
         - Se ejecuta desde Azure Function Timer (NO desde scheduler local)
@@ -495,6 +507,8 @@ class ReservaDAO:
         Returns:
             int: Cantidad de reservas marcadas como NoShow
         """
+        from src.dao.catalogos.mesa_estatus_dao import MesaEstatusDAO
+        
         with get_db_session() as session:
             from datetime import timedelta
             ahora_mexico = datetime.now(TZ_MEXICO).replace(tzinfo=None)
@@ -525,6 +539,23 @@ class ReservaDAO:
                     reserva.updated_at = ahora_mexico
                     reserva.notas = (reserva.notas or "") + f" | NoShow automático (por job - tolerancia {tolerancia} min)"
                     count += 1
+                    
+                    # LIBERAR LA MESA: devolverla a Disponible si tiene hold
+                    if reserva.hold_id:
+                        hold = session.query(HoldMesa).filter(
+                            HoldMesa.id_hold_mesa == reserva.hold_id
+                        ).first()
+                        
+                        if hold:
+                            mesa_id = hold.mesa_id
+                            # Cambiar mesa a "Disponible" (estatus=1)
+                            MesaEstatusDAO.actualizar_estatus_mesa(
+                                mesa_id,
+                                1,  # Disponible
+                                None,
+                                f"Mesa disponible - Reserva marcada NoShow por tolerancia expirada"
+                            )
+                            logger.info(f"Job verificar_no_shows: Mesa {mesa_id} liberada después de NoShow en reserva {reserva.id_reserva}")
             
             if count > 0:
                 session.commit()
