@@ -50,33 +50,39 @@ class ReservaDAO:
             print(f"  Rango original: {inicio} - {fin_estimado}")
             print(f"  Rango con limpieza: {inicio} - {fin_con_limpieza}")
             
-            # OBTENER TODAS LAS RESERVAS ACTIVAS EN ESTA MESA (sin cálculos en SQL)
-            # Después verificar en Python para evitar problemas con datetime2 en SQL Server
-            reservas_activas = session.query(Reserva).filter(
-                and_(
-                    Reserva.mesa_id == mesa_id,
+            # OBTENER TODAS LAS RESERVAS ACTIVAS PARA ESTA MESA
+            # Usamos HoldMesa como intermediario porque Reserva no tiene mesa_id directo
+            # Reserva.hold_id -> HoldMesa.mesa_id
+            try:
+                reservas_activas = session.query(Reserva).join(
+                    HoldMesa, Reserva.hold_id == HoldMesa.id_hold_mesa
+                ).filter(
+                    HoldMesa.mesa_id == mesa_id,
                     Reserva.estatus.in_([1, 2])  # Programada o EnCurso
-                )
-            ).all()
+                ).all()
+            except Exception as e:
+                logger.error(f"Error al consultar reservas activas para mesa {mesa_id}: {e}")
+                print(f"  ERROR en consulta: {e}")
+                raise
             
             print(f"  Encontradas {len(reservas_activas)} reservas activas en mesa {mesa_id}")
             
-            # VERIFICAR TRASLAPES EN PYTHON (con timedelta)
+            # VERIFICAR TRASLAPES EN PYTHON (NO en SQL)
             for reserva in reservas_activas:
-                # Rango de la reserva existente (con 10 min de limpieza)
+                # Rango de la reserva existente (con 10 min de limpieza) - CALCULADO EN PYTHON
                 reserva_fin_con_limpieza = reserva.fin_estimado + timedelta(minutes=10)
                 
                 # Lógica de solapamiento (en Python):
                 # Dos rangos se solapan si:
                 # inicio_nuevo <= fin_existente_limpio AND fin_nuevo_limpio >= inicio_existente
                 if inicio <= reserva_fin_con_limpieza and fin_con_limpieza >= reserva.inicio:
-                    print(f"  ⚠️  Conflicto: Reserva {reserva.id_reserva}")
-                    print(f"     Rango existente: {reserva.inicio} - {reserva_fin_con_limpieza}")
+                    print(f"  ⚠️  TRASLAPE DETECTADO: Reserva {reserva.id_reserva}")
+                    print(f"     Rango existente: {reserva.inicio} - {reserva_fin_con_limpieza} (con 10 min limpieza)")
                     print(f"     Rango solicitado: {inicio} - {fin_con_limpieza}")
-                    logger.warning(f"Mesa {mesa_id} tiene traslape con Reserva {reserva.id_reserva}")
+                    logger.warning(f"Mesa {mesa_id} tiene traslape con Reserva {reserva.id_reserva} en rango {inicio} - {fin_con_limpieza}")
                     return False
             
-            print(f"  ✓ Disponible para reserva")
+            print(f"  ✓ Disponible - No hay traslapes")
             return True
     
     @staticmethod
@@ -130,7 +136,7 @@ class ReservaDAO:
                     mesa_id = hold.mesa_id
                     logger.info(f"Mesa obtenida desde Hold {hold_id}: mesa_id={mesa_id}")
             
-            # PASO 2B: Validar que mesa existe
+            # PASO 2B: Validar que mesa existe (si tenemos mesa_id)
             if mesa_id:
                 from src.models.catalogos.mesa_model import Mesa
                 mesa_existe = session.query(Mesa).filter(Mesa.id_mesa == mesa_id).first()
@@ -142,7 +148,7 @@ class ReservaDAO:
             if mesa_id:
                 if not ReservaDAO.verificar_reserva_disponible(mesa_id, inicio, fin_estimado):
                     logger.warning(f"No se puede crear reserva: traslape detectado en mesa {mesa_id} para {inicio} - {fin_estimado}")
-                    raise ValueError(f"Mesa {mesa_id} no está disponible en el rango {inicio.strftime('%H:%M')} - {fin_estimado.strftime('%H:%M')}. Ya existe una reserva o hold en ese horario.")
+                    raise ValueError(f"Mesa {mesa_id} no está disponible en el rango {inicio.strftime('%H:%M')} - {fin_estimado.strftime('%H:%M')}. Ya existe una reserva en ese horario.")
             else:
                 logger.warning(f"Reserva creada sin mesa_id (hold_id={hold_id}), no se validó traslape")
             
