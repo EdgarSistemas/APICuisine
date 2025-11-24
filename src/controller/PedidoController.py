@@ -617,7 +617,7 @@ def listar_pedidos():
     tags:
       - Pedidos
     summary: "Listar Pedidos"
-    description: Retorna lista paginada de pedidos con filtros opcionales por estado, rango de fechas.
+    description: Retorna lista de pedidos con filtros opcionales por estado y rango de fechas.
     parameters:
       - in: query
         name: sucursal_id
@@ -628,28 +628,18 @@ def listar_pedidos():
       - in: query
         name: estado
         type: integer
-        description: Filtrar por estado (1-6)
+        description: Filtrar por estado (1-6, opcional)
         example: 3
       - in: query
         name: fecha_desde
         type: string
-        description: ISO date (YYYY-MM-DD)
+        description: Filtrar desde fecha (ISO format YYYY-MM-DD, opcional)
         example: "2025-11-01"
       - in: query
         name: fecha_hasta
         type: string
-        description: ISO date (YYYY-MM-DD)
+        description: Filtrar hasta fecha (ISO format YYYY-MM-DD, opcional)
         example: "2025-11-23"
-      - in: query
-        name: offset
-        type: integer
-        default: 0
-        description: Paginación offset
-      - in: query
-        name: limit
-        type: integer
-        default: 50
-        description: Paginación limit (máx 500)
     responses:
       200:
         description: Lista de pedidos
@@ -662,16 +652,12 @@ def listar_pedidos():
                 type: object
             total:
               type: integer
-            offset:
-              type: integer
-            limit:
-              type: integer
       400:
         description: Parámetros inválidos
     x-code-samples:
       - lang: curl
         source: |
-          curl -X GET "http://localhost:5000/api/pedidos?sucursal_id=1&estado=3&offset=0&limit=10" \\
+          curl -X GET "http://localhost:5000/api/pedidos?sucursal_id=1&estado=3" \\
             -H "Authorization: Bearer YOUR_TOKEN"
     """
     try:
@@ -682,24 +668,20 @@ def listar_pedidos():
         estado = request.args.get('estado', type=int, default=None)
         fecha_desde = request.args.get('fecha_desde')
         fecha_hasta = request.args.get('fecha_hasta')
-        offset = request.args.get('offset', default=0, type=int)
-        limit = request.args.get('limit', default=50, type=int)
         
         # Parsear fechas si vienen
         try:
             fecha_desde = datetime.fromisoformat(fecha_desde) if fecha_desde else None
             fecha_hasta = datetime.fromisoformat(fecha_hasta) if fecha_hasta else None
         except ValueError:
-            return jsonify({"error": "Formato de fecha inválido (use ISO format)"}), 400
+            return jsonify({"error": "Formato de fecha inválido (use ISO format YYYY-MM-DD)"}), 400
         
         # Listar
         pedidos, total = PedidoDAO.listar_pedidos_por_sucursal(
             sucursal_id=sucursal_id,
             fecha_desde=fecha_desde,
             fecha_hasta=fecha_hasta,
-            estado=estado,
-            offset=offset,
-            limit=limit
+            estado=estado
         )
         
         list_schema = PedidoListSchema(many=True)
@@ -708,9 +690,7 @@ def listar_pedidos():
         
         return jsonify({
             "pedidos": list_schema.dump(pedidos),
-            "total": total,
-            "offset": offset,
-            "limit": limit
+            "total": total
         }), 200
     
     except Exception as e:

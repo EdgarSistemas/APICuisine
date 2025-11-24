@@ -50,7 +50,7 @@ class PedidoDAO:
         Returns:
             Dict: {id_pedido, folio, estado_pedido, created_at}
         """
-        db = get_db()
+        db = get_db_session()
         try:
             # Generar folio único
             folio = f"PED{sucursal_id}{datetime.utcnow().strftime('%Y%m%d%H%M%S')}{str(uuid.uuid4())[:6].upper()}"
@@ -118,7 +118,7 @@ class PedidoDAO:
         Returns:
             Dict: {id_pedido_item, producto_id, combo_id, cantidad, precio_unit}
         """
-        db = get_db()
+        db = get_db_session()
         try:
             pedido = db.session.query(Pedido).filter_by(id_pedido=pedido_id).first()
             if not pedido:
@@ -191,7 +191,7 @@ class PedidoDAO:
         Returns:
             Dict: {id_pedido, estado_pedido, updated_at}
         """
-        db = get_db()
+        db = get_db_session()
         try:
             pedido = db.session.query(Pedido).filter_by(id_pedido=pedido_id).first()
             if not pedido:
@@ -256,7 +256,7 @@ class PedidoDAO:
         Returns:
             Dict con pedido completo o None
         """
-        db = get_db()
+        db = get_db_session()
         try:
             pedido = db.session.query(Pedido).filter_by(id_pedido=pedido_id).first()
             if not pedido:
@@ -317,7 +317,7 @@ class PedidoDAO:
         Returns:
             tuple: (lista de pedidos, total)
         """
-        db = get_db()
+        db = get_db_session()
         try:
             query = db.session.query(Pedido).filter_by(sucursal_id=sucursal_id)
             
@@ -357,7 +357,7 @@ class PedidoDAO:
     @staticmethod
     def obtener_pedidos_por_estado(sucursal_id: int, estado: int):
         """Obtiene todos los pedidos de una sucursal en un estado específico"""
-        db = get_db()
+        db = get_db_session()
         try:
             pedidos = db.session.query(Pedido).filter(
                 and_(
@@ -390,7 +390,7 @@ class PedidoDAO:
         Returns:
             Decimal: Total del pedido
         """
-        db = get_db()
+        db = get_db_session()
         try:
             items = db.session.query(PedidoItem).filter_by(pedido_id=pedido_id).all()
             
@@ -408,7 +408,7 @@ class PedidoDAO:
     @staticmethod
     def pedido_existe(pedido_id: int) -> bool:
         """Verifica si un pedido existe"""
-        db = get_db()
+        db = get_db_session()
         try:
             existe = db.session.query(Pedido).filter_by(id_pedido=pedido_id).first() is not None
             return existe
