@@ -22,7 +22,7 @@ class ReservaDAO:
     """Data Access Object para Reserva"""
     
     @staticmethod
-    def verificar_reserva_disponible(mesa_id: int, inicio: datetime, fin_estimado: datetime) -> bool:
+    def verificar_reserva_disponible(mesa_id: int, inicio: datetime, fin_estimado: datetime) -> dict:
         """
         Verificar si hay traslape con otras RESERVAS activas (confirmadas).
         
@@ -37,7 +37,12 @@ class ReservaDAO:
             fin_estimado: Fecha/hora fin estimado
             
         Returns:
-            True si está disponible, False si hay conflicto con otra reserva
+            Dict con estructura:
+            {
+                "disponible": bool,
+                "proxima_disponibilidad": datetime o None,  # Cuándo queda disponible si hay conflicto
+                "razon": str  # Detalles del conflicto si existe
+            }
         """
         from datetime import timedelta
         
@@ -68,6 +73,9 @@ class ReservaDAO:
             print(f"  Encontradas {len(reservas_activas)} reservas activas en mesa {mesa_id}")
             
             # VERIFICAR TRASLAPES EN PYTHON (NO en SQL)
+            proxima_disponibilidad = None
+            reserva_conflictiva = None
+            
             for reserva in reservas_activas:
                 # Rango de la reserva existente (con 10 min de limpieza) - CALCULADO EN PYTHON
                 reserva_fin_con_limpieza = reserva.fin_estimado + timedelta(minutes=10)
@@ -80,10 +88,37 @@ class ReservaDAO:
                     print(f"     Rango existente: {reserva.inicio} - {reserva_fin_con_limpieza} (con 10 min limpieza)")
                     print(f"     Rango solicitado: {inicio} - {fin_con_limpieza}")
                     logger.warning(f"Mesa {mesa_id} tiene traslape con Reserva {reserva.id_reserva} en rango {inicio} - {fin_con_limpieza}")
-                    return False
+                    
+                    # Guardar la hora más temprana cuando queda disponible
+                    if proxima_disponibilidad is None or reserva_fin_con_limpieza < proxima_disponibilidad:
+                        proxima_disponibilidad = reserva_fin_con_limpieza
+                        reserva_conflictiva = reserva
+            
+            if proxima_disponibilidad and reserva_conflictiva:
+                # Mesa disponible DESPUÉS de la limpieza (fin + 10 min)
+                mesa_disponible_desde = proxima_disponibilidad
+                
+                # Reserva nueva debe terminar ANTES de: inicio_conflictiva - 10 min (para tu limpieza)
+                reserva_debe_terminar_antes = reserva_conflictiva.inicio - timedelta(minutes=10)
+                
+                print(f"  ✗ No disponible")
+                print(f"     Mesa disponible desde: {mesa_disponible_desde.strftime('%H:%M')}")
+                print(f"     Reserva debe terminar antes: {reserva_debe_terminar_antes.strftime('%H:%M')}")
+                
+                return {
+                    "disponible": False,
+                    "mesa_disponible_desde": mesa_disponible_desde,
+                    "reserva_debe_terminar_antes": reserva_debe_terminar_antes,
+                    "razon": f"Conflicto con reserva existente"
+                }
             
             print(f"  ✓ Disponible - No hay traslapes")
-            return True
+            return {
+                "disponible": True,
+                "mesa_disponible_desde": None,
+                "reserva_debe_terminar_antes": None,
+                "razon": None
+            }
     
     @staticmethod
     def crear_reserva(
@@ -146,9 +181,22 @@ class ReservaDAO:
             
             # PASO 3: VALIDACIÓN - Verificar que no hay traslape con otras reservas activas
             if mesa_id:
-                if not ReservaDAO.verificar_reserva_disponible(mesa_id, inicio, fin_estimado):
+                resultado_disponibilidad = ReservaDAO.verificar_reserva_disponible(mesa_id, inicio, fin_estimado)
+                if not resultado_disponibilidad["disponible"]:
                     logger.warning(f"No se puede crear reserva: traslape detectado en mesa {mesa_id} para {inicio} - {fin_estimado}")
-                    raise ValueError(f"Mesa {mesa_id} no está disponible en el rango {inicio.strftime('%H:%M')} - {fin_estimado.strftime('%H:%M')}. Ya existe una reserva en ese horario.")
+                    
+                    # Obtener los horarios disponibles
+                    mesa_disponible_desde = resultado_disponibilidad.get("mesa_disponible_desde")
+                    reserva_debe_terminar_antes = resultado_disponibilidad.get("reserva_debe_terminar_antes")
+                    
+                    if mesa_disponible_desde and reserva_debe_terminar_antes:
+                        error = ValueError(f"Mesa no disponible en ese horario")
+                        # Adjuntar datos de disponibilidad a la excepción
+                        error.mesa_disponible_desde = mesa_disponible_desde
+                        error.reserva_debe_terminar_antes = reserva_debe_terminar_antes
+                        raise error
+                    else:
+                        raise ValueError(resultado_disponibilidad.get("razon", "Mesa no disponible en ese horario"))
             else:
                 logger.warning(f"Reserva creada sin mesa_id (hold_id={hold_id}), no se validó traslape")
             

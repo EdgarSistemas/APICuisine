@@ -201,7 +201,15 @@ def crear_reserva():
             elif 'expiró' in result['error'] or 'no está activo' in result['error']:
                 return jsonify({"error": result['error']}), 409
             else:
-                return jsonify({"error": result['error']}), 400
+                # Verificar si el error viene con datos de disponibilidad
+                if isinstance(result.get('data'), dict) and 'mesa_disponible_desde' in result['data']:
+                    return jsonify({
+                        "error": result['error'],
+                        "mesa_disponible_desde": result['data']['mesa_disponible_desde'],
+                        "reserva_debe_terminar_antes": result['data']['reserva_debe_terminar_antes']
+                    }), 400
+                else:
+                    return jsonify({"error": result['error']}), 400
         
         return jsonify({
             "message": "Reserva creada exitosamente",
@@ -318,7 +326,7 @@ def obtener_reserva(reserva_id):
         return jsonify({"error": f"Error interno: {str(e)}"}), 500
 
 
-@reserva_bp.route('', methods=['GET'])
+@reserva_bp.route('/listar', methods=['POST'])
 @jwt_required()
 def listar_reservas():
     """
@@ -327,35 +335,37 @@ def listar_reservas():
     tags:
       - Reservas
     summary: "Paso 2B: Listar Reservas (con filtros)"
-    description: Lista todas las reservas con posibilidad de filtrar por sucursal, cliente, estado y rango de fechas. Solo retorna reservas de la sucursal del usuario autenticado (multi-tenant). Útil para tableros y reportes.
+    description: Lista todas las reservas con posibilidad de filtrar por sucursal, cliente, estado y rango de fechas. Los filtros se envían en el body de la solicitud y son completamente opcionales. Solo retorna reservas de la sucursal del usuario autenticado (multi-tenant). Útil para tableros y reportes.
     parameters:
-      - in: query
-        name: sucursal_id
-        type: integer
+      - in: body
+        name: body
         required: false
-        description: "Filtrar por ID de sucursal (opcional). Ej: ?sucursal_id=1"
-      - in: query
-        name: cliente_id
-        type: integer
-        required: false
-        description: "Filtrar por ID de cliente (opcional). Ej: ?cliente_id=1"
-      - in: query
-        name: estatus
-        type: integer
-        required: false
-        description: "Filtrar por estatus (opcional). 1=Programada, 2=EnCurso, 3=Completada, 4=NoShow, 5=Cancelada. Ej: ?estatus=1"
-      - in: query
-        name: fecha_desde
-        type: string
-        format: "yyyy-mm-dd hh:mm:ss"
-        required: false
-        description: "Inicio del rango de fechas (formato: yyyy-mm-dd hh:mm:ss, zona horaria: América/México_City). Retorna reservas que se solapan con este rango (opcional). Ej: ?fecha_desde=2025-11-18%2000:00:00"
-      - in: query
-        name: fecha_hasta
-        type: string
-        format: "yyyy-mm-dd hh:mm:ss"
-        required: false
-        description: "Fin del rango de fechas (formato: yyyy-mm-dd hh:mm:ss, zona horaria: América/México_City). Retorna reservas que se solapan con este rango (opcional). Ej: ?fecha_hasta=2025-11-18%2023:59:59"
+        schema:
+          type: object
+          properties:
+            sucursal_id:
+              type: integer
+              description: "Filtrar por ID de sucursal (opcional). Ej: 1"
+            cliente_id:
+              type: integer
+              description: "Filtrar por ID de cliente (opcional). Ej: 1"
+            estatus:
+              type: integer
+              description: "Filtrar por estatus (opcional). 1=Programada, 2=EnCurso, 3=Completada, 4=NoShow, 5=Cancelada. Ej: 1"
+            fecha_desde:
+              type: string
+              format: "yyyy-mm-dd hh:mm:ss"
+              description: "Inicio del rango de fechas (formato: yyyy-mm-dd hh:mm:ss, zona horaria: América/México_City). Retorna reservas que se solapan con este rango (opcional)"
+            fecha_hasta:
+              type: string
+              format: "yyyy-mm-dd hh:mm:ss"
+              description: "Fin del rango de fechas (formato: yyyy-mm-dd hh:mm:ss, zona horaria: América/México_City). Retorna reservas que se solapan con este rango (opcional)"
+        example:
+          sucursal_id: 1
+          cliente_id: 1
+          estatus: 1
+          fecha_desde: "2025-11-22 00:00:00"
+          fecha_hasta: "2025-11-22 23:59:59"
     responses:
       200:
         description: "Lista de reservas obtenida exitosamente"
@@ -431,30 +441,38 @@ def listar_reservas():
     x-code-samples:
       - lang: curl
         source: |
-          # Listar todas las reservas
-          curl -X GET http://localhost:5000/api/reservas/ \\
-            -H "Authorization: Bearer YOUR_JWT_TOKEN"
+          # Listar todas las reservas (sin filtros)
+          curl -X POST http://localhost:5000/api/reservas/ \\
+            -H "Content-Type: application/json" \\
+            -H "Authorization: Bearer YOUR_JWT_TOKEN" \\
+            -d '{}'
 
           # Listar reservas de la sucursal 1
-          curl -X GET "http://localhost:5000/api/reservas/?sucursal_id=1" \\
-            -H "Authorization: Bearer YOUR_JWT_TOKEN"
+          curl -X POST http://localhost:5000/api/reservas/ \\
+            -H "Content-Type: application/json" \\
+            -H "Authorization: Bearer YOUR_JWT_TOKEN" \\
+            -d '{"sucursal_id": 1}'
 
           # Listar reservas programadas del cliente 1 en sucursal 1
-          curl -X GET "http://localhost:5000/api/reservas/?sucursal_id=1&cliente_id=1&estatus=1" \\
-            -H "Authorization: Bearer YOUR_JWT_TOKEN"
+          curl -X POST http://localhost:5000/api/reservas/ \\
+            -H "Content-Type: application/json" \\
+            -H "Authorization: Bearer YOUR_JWT_TOKEN" \\
+            -d '{"sucursal_id": 1, "cliente_id": 1, "estatus": 1}'
 
-          # Listar reservas activas (estatus=2) del cliente 2, sucursal 4, entre 12:00 y 17:45
-          curl -X GET "http://localhost:5000/api/reservas/?sucursal_id=4&cliente_id=2&estatus=2&fecha_desde=2025-11-22%2012:00:00&fecha_hasta=2025-11-22%2017:45:00" \\
-            -H "Authorization: Bearer YOUR_JWT_TOKEN"
-
-          # Listar reservas de una fecha específica en sucursal 1
-          curl -X GET "http://localhost:5000/api/reservas/?sucursal_id=1&fecha_desde=2025-11-22%2000:00:00&fecha_hasta=2025-11-22%2023:59:59" \\
-            -H "Authorization: Bearer YOUR_JWT_TOKEN"
+          # Listar reservas activas de una fecha específica
+          curl -X POST http://localhost:5000/api/reservas/ \\
+            -H "Content-Type: application/json" \\
+            -H "Authorization: Bearer YOUR_JWT_TOKEN" \\
+            -d '{
+              "estatus": 2,
+              "fecha_desde": "2025-11-22 12:00:00",
+              "fecha_hasta": "2025-11-22 17:45:00"
+            }'
     """
     try:
-        # Parsear query params
+        # Parsear body - todos los parámetros son opcionales
         schema = ReservaListarQuerySchema()
-        filters = schema.load(request.args)
+        filters = schema.load(request.json or {})
         
         # Usuario autenticado
         current_user = get_jwt_identity()

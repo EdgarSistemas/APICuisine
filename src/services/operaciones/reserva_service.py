@@ -114,7 +114,14 @@ class ReservaService:
             
         except ValueError as e:
             logger.error(f"Validación fallida en ReservaService.crear_reserva: {str(e)}")
-            return {"success": False, "error": str(e)}
+            # Verificar si el error tiene datos de disponibilidad
+            error_data = {}
+            if hasattr(e, 'mesa_disponible_desde') and hasattr(e, 'reserva_debe_terminar_antes'):
+                error_data = {
+                    'mesa_disponible_desde': e.mesa_disponible_desde.strftime('%H:%M'),
+                    'reserva_debe_terminar_antes': e.reserva_debe_terminar_antes.strftime('%H:%M')
+                }
+            return {"success": False, "error": str(e), "data": error_data if error_data else None}
             
         except Exception as e:
             logger.error(f"Error en ReservaService.crear_reserva: {str(e)}")
