@@ -44,8 +44,8 @@ class HoldMesaCreateSchema(Schema):
             if fin_estimado <= inicio:
                 raise ValidationError("fin_estimado debe ser posterior a inicio")
             
-            # Validar que inicio sea futuro (con margen de 5 minutos)
-            ahora = datetime.now()
+            # Validar que inicio sea futuro (con margen de 5 minutos) - usar zona de México
+            ahora = datetime.now(TZ_MEXICO).replace(tzinfo=None)
             if inicio < ahora - timedelta(minutes=5):
                 raise ValidationError("La fecha de inicio debe ser futura o actual")
 

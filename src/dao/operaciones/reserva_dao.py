@@ -41,7 +41,7 @@ class ReservaDAO:
         from datetime import timedelta
         
         with get_db_session() as session:
-            # ⚡ AGREGAR 10 MINUTOS DE LIMPIEZA AL RANGO SOLICITADO
+            # AGREGAR 10 MINUTOS DE LIMPIEZA AL RANGO SOLICITADO
             fin_con_limpieza = fin_estimado + timedelta(minutes=10)
             
             print(f"\n[VERIFICAR_RESERVA_DISPONIBLE] Comprobando disponibilidad")
@@ -85,20 +85,20 @@ class ReservaDAO:
         """
         Crear nueva reserva confirmada.
         
-        ⚡ VALIDACIÓN: Verifica que no haya traslape con otras reservas activas.
+        VALIDACIÓN: Verifica que no haya traslape con otras reservas activas.
         
-        Las fechas (inicio, fin_estimado) llegan ya parseadas por Marshmallow
-        en formato correcto de México (naive datetime en hora de México).
+        Las fechas (inicio, fin_estimado) llegan como naive datetime (sin timezone).
+        Se asume que están en zona de México y se convierten si es necesario.
         
         Args:
             cliente_id: ID del cliente que reserva
             recepcionista_id: ID del recepcionista que confirma (desde PWA)
-            inicio: Fecha/hora inicio reserva (naive datetime en TZ_MEXICO)
-            fin_estimado: Fecha/hora fin estimado (naive datetime en TZ_MEXICO)
+            inicio: Fecha/hora inicio reserva (naive datetime, asumida zona México)
+            fin_estimado: Fecha/hora fin estimado (naive datetime, asumida zona México)
             tolerancia_min: Minutos de tolerancia para NoShow (NULL = usar config)
             notas: Notas adicionales
             hold_id: ID del hold si se origina desde hold
-            mesa_id: ID de la mesa (requerido para validar disponibilidad)
+            mesa_id: ID de la mesa (opcional, se obtiene del hold si no se proporciona)
             
         Returns:
             Dict serializado de la reserva, o None si hay error
@@ -106,20 +106,31 @@ class ReservaDAO:
         schema = ReservaResponseSchema()
         
         with get_db_session() as session:
-            # VALIDACIÓN: Si hay mesa_id, verificar que no hay traslape con otras reservas
-            if mesa_id:
-                # Obtener la mesa_id del hold si no se proporcionó directamente
-                if not mesa_id and hold_id:
-                    hold = session.query(HoldMesa).filter(HoldMesa.id_hold_mesa == hold_id).first()
-                    if hold:
-                        mesa_id = hold.mesa_id
-                
-                # Si tenemos mesa_id, validar disponibilidad
-                if mesa_id:
-                    if not ReservaDAO.verificar_reserva_disponible(mesa_id, inicio, fin_estimado):
-                        logger.warning(f"No se puede crear reserva: traslape detectado en mesa {mesa_id}")
-                        return None
+            # PASO 1: Convertir fechas naive a zona de México si es necesario
+            # Las fechas llegan sin timezone, se asume que están en zona de México
+            if inicio.tzinfo is None:
+                inicio = TZ_MEXICO.localize(inicio).replace(tzinfo=None)
+            if fin_estimado.tzinfo is None:
+                fin_estimado = TZ_MEXICO.localize(fin_estimado).replace(tzinfo=None)
             
+            logger.info(f"[CREAR_RESERVA] Fechas convertidas a zona México: {inicio} - {fin_estimado}")
+            
+            # PASO 2: Obtener mesa_id del hold si no se proporcionó
+            if not mesa_id and hold_id:
+                hold = session.query(HoldMesa).filter(HoldMesa.id_hold_mesa == hold_id).first()
+                if hold:
+                    mesa_id = hold.mesa_id
+                    logger.info(f"Mesa obtenida desde Hold {hold_id}: mesa_id={mesa_id}")
+            
+            # PASO 3: VALIDACIÓN - Verificar que no hay traslape con otras reservas activas
+            if mesa_id:
+                if not ReservaDAO.verificar_reserva_disponible(mesa_id, inicio, fin_estimado):
+                    logger.warning(f"No se puede crear reserva: traslape detectado en mesa {mesa_id} para {inicio} - {fin_estimado}")
+                    raise ValueError(f"Mesa {mesa_id} no está disponible en el rango {inicio.strftime('%H:%M')} - {fin_estimado.strftime('%H:%M')}. Ya existe una reserva o hold en ese horario.")
+            else:
+                logger.warning(f"Reserva creada sin mesa_id (hold_id={hold_id}), no se validó traslape")
+            
+            # PASO 4: Crear la reserva
             reserva = Reserva(
                 cliente_id=cliente_id,
                 recepcionista_id=recepcionista_id,

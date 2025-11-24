@@ -81,7 +81,15 @@ class ReservaService:
             else:
                 logger.warning(f"Reserva creada sin hold previo por usuario {usuario_id}")
             
-            # Crear reserva
+            # Obtener mesa_id del hold si existe
+            mesa_id = None
+            if hold_id:
+                hold = HoldMesaDAO.obtener_hold_por_id(hold_id)
+                if hold:
+                    mesa_id = hold['mesa_id']
+                    logger.info(f"Mesa obtenida desde Hold {hold_id}: mesa_id={mesa_id}")
+            
+            # Crear reserva (el DAO se encarga de convertir zonas horarias)
             reserva = ReservaDAO.crear_reserva(
                 cliente_id=cliente_id,
                 recepcionista_id=recepcionista_id,
@@ -89,8 +97,12 @@ class ReservaService:
                 fin_estimado=fin_estimado,
                 tolerancia_min=tolerancia_min,
                 notas=notas,
-                hold_id=hold_id
+                hold_id=hold_id,
+                mesa_id=mesa_id
             )
+            
+            if not reserva:
+                return {"success": False, "error": "Error al crear la reserva"}
             
             # Si venía de hold, marcarlo como confirmado
             if hold_id:
@@ -99,6 +111,10 @@ class ReservaService:
             
             logger.info(f"Reserva creada: ID {reserva['id_reserva']} para cliente {cliente_id}")
             return {"success": True, "data": reserva}
+            
+        except ValueError as e:
+            logger.error(f"Validación fallida en ReservaService.crear_reserva: {str(e)}")
+            return {"success": False, "error": str(e)}
             
         except Exception as e:
             logger.error(f"Error en ReservaService.crear_reserva: {str(e)}")
