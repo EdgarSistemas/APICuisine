@@ -29,6 +29,7 @@ class ReservaDAO:
         ⚡ IMPORTANTE: 
         - SOLO valida Reservas, NO Holds
         - Suma 10 minutos de limpieza automáticamente
+        - CALCULA EN PYTHON (no en SQL Server) para evitar errores de tipo datetime2
         
         Args:
             mesa_id: ID de la mesa
@@ -41,7 +42,7 @@ class ReservaDAO:
         from datetime import timedelta
         
         with get_db_session() as session:
-            # AGREGAR 10 MINUTOS DE LIMPIEZA AL RANGO SOLICITADO
+            # AGREGAR 10 MINUTOS DE LIMPIEZA AL RANGO SOLICITADO (en Python, no en SQL)
             fin_con_limpieza = fin_estimado + timedelta(minutes=10)
             
             print(f"\n[VERIFICAR_RESERVA_DISPONIBLE] Comprobando disponibilidad")
@@ -49,24 +50,31 @@ class ReservaDAO:
             print(f"  Rango original: {inicio} - {fin_estimado}")
             print(f"  Rango con limpieza: {inicio} - {fin_con_limpieza}")
             
-            # Verificar SOLO reservas activas (estatus=1 Programada, 2 EnCurso)
-            # TAMBIÉN CONSIDERAR 10 MINUTOS DE LIMPIEZA
-            reservas_conflictivas = session.query(Reserva).filter(
+            # OBTENER TODAS LAS RESERVAS ACTIVAS EN ESTA MESA (sin cálculos en SQL)
+            # Después verificar en Python para evitar problemas con datetime2 en SQL Server
+            reservas_activas = session.query(Reserva).filter(
                 and_(
-                    Reserva.estatus.in_([1, 2]),  # Programada o EnCurso
-                    or_(
-                        and_(Reserva.inicio <= inicio, (Reserva.fin_estimado + timedelta(minutes=10)) > inicio),
-                        and_(Reserva.inicio < fin_con_limpieza, (Reserva.fin_estimado + timedelta(minutes=10)) >= fin_con_limpieza),
-                        and_(Reserva.inicio >= inicio, (Reserva.fin_estimado + timedelta(minutes=10)) <= fin_con_limpieza)
-                    )
+                    Reserva.mesa_id == mesa_id,
+                    Reserva.estatus.in_([1, 2])  # Programada o EnCurso
                 )
-            ).first()
+            ).all()
             
-            if reservas_conflictivas:
-                print(f"  ⚠️  Conflicto: Reserva activa encontrada (ID={reservas_conflictivas.id_reserva})")
-                print(f"     Reserva ocupa: {reservas_conflictivas.inicio} - {reservas_conflictivas.fin_estimado + timedelta(minutes=10)} (con limpieza)")
-                logger.warning(f"Mesa {mesa_id} tiene reserva activa en rango {inicio} - {fin_con_limpieza}")
-                return False
+            print(f"  Encontradas {len(reservas_activas)} reservas activas en mesa {mesa_id}")
+            
+            # VERIFICAR TRASLAPES EN PYTHON (con timedelta)
+            for reserva in reservas_activas:
+                # Rango de la reserva existente (con 10 min de limpieza)
+                reserva_fin_con_limpieza = reserva.fin_estimado + timedelta(minutes=10)
+                
+                # Lógica de solapamiento (en Python):
+                # Dos rangos se solapan si:
+                # inicio_nuevo <= fin_existente_limpio AND fin_nuevo_limpio >= inicio_existente
+                if inicio <= reserva_fin_con_limpieza and fin_con_limpieza >= reserva.inicio:
+                    print(f"  ⚠️  Conflicto: Reserva {reserva.id_reserva}")
+                    print(f"     Rango existente: {reserva.inicio} - {reserva_fin_con_limpieza}")
+                    print(f"     Rango solicitado: {inicio} - {fin_con_limpieza}")
+                    logger.warning(f"Mesa {mesa_id} tiene traslape con Reserva {reserva.id_reserva}")
+                    return False
             
             print(f"  ✓ Disponible para reserva")
             return True
@@ -121,6 +129,14 @@ class ReservaDAO:
                 if hold:
                     mesa_id = hold.mesa_id
                     logger.info(f"Mesa obtenida desde Hold {hold_id}: mesa_id={mesa_id}")
+            
+            # PASO 2B: Validar que mesa existe
+            if mesa_id:
+                from src.models.catalogos.mesa_model import Mesa
+                mesa_existe = session.query(Mesa).filter(Mesa.id_mesa == mesa_id).first()
+                if not mesa_existe:
+                    logger.error(f"Mesa {mesa_id} no existe en BD")
+                    raise ValueError(f"Mesa {mesa_id} no existe en el sistema")
             
             # PASO 3: VALIDACIÓN - Verificar que no hay traslape con otras reservas activas
             if mesa_id:
