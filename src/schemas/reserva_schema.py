@@ -116,8 +116,8 @@ class ReservaCreateSchema(Schema):
             if fin_estimado <= inicio:
                 raise ValidationError("fin_estimado debe ser posterior a inicio")
             
-            # Reserva debe ser futura (con margen de 5 min)
-            ahora = datetime.now()
+            # Reserva debe ser futura (con margen de 5 min) - usar zona horaria de México
+            ahora = datetime.now(TZ_MEXICO).replace(tzinfo=None)
             if inicio < ahora - timedelta(minutes=5):
                 raise ValidationError("La fecha de inicio debe ser futura o actual")
 
@@ -168,10 +168,10 @@ class ReservaResponseSchema(Schema):
         return estatus_map.get(obj.estatus, "Desconocido")
     
     def verificar_puede_iniciar(self, obj):
-        """Verifica si puede iniciar la reserva (está cerca de la hora)"""
+        """Verifica si puede iniciar la reserva (está cerca de la hora) - usa zona de México"""
         if obj.estatus != 1:  # Solo si está programada
             return False
-        ahora = datetime.now()
+        ahora = datetime.now(TZ_MEXICO).replace(tzinfo=None)
         tolerancia = timedelta(minutes=obj.tolerancia_min or 15)
         return ahora >= (obj.inicio - tolerancia)
 
