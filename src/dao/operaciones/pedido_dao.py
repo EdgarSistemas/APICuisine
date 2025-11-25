@@ -1,8 +1,23 @@
 """
 PedidoDAO - Data Access Object para operaciones.Pedido
 Gestión de pedidos con creación, items, y cambio de estado
-Estados: 1=Creado, 2=Confirmado, 3=EnPreparacion, 4=Listo, 5=Entregado, 6=Cancelado
-Inventory descent happens ONLY when estado_pedido → 3 (EnPreparacion)
+
+Sistema de estados de Pedido (estado_pedido):
+- 0: Iniciado (pedido recién creado)
+- 3: Completo (usuario cierra el pedido)
+- 4: Cancelado
+- 5: Pagado
+
+Sistema de estados de PedidoItem (estatus_detalle):
+- 1: EnCocina (enviado a preparar, AQUÍ SE CONSUME INVENTARIO)
+- 2: Listo (preparado)
+- 3: Completo (servido/entregado)
+- 4: Cancelado
+- 5: Pagado
+
+Flujo Pedido: 0 (crear) → 3 (cerrar) → 5 (pagar)
+Flujo Items:  1 (crear+inventario) → 2 (cocina listo) → 3 (cerrar) → 5 (pagar)
+Takeaway: Cuando todos items = 2 (Listo), auto-pago a 5
 """
 
 from datetime import datetime, timedelta
@@ -18,6 +33,19 @@ import uuid
 import logging
 
 logger = logging.getLogger(__name__)
+
+# Constantes de estado de Pedido
+ESTADO_INICIADO = 0      # Pedido recién creado
+ESTADO_COMPLETO = 3      # Pedido cerrado por usuario
+ESTADO_CANCELADO = 4     # Cancelado
+ESTADO_PAGADO = 5        # Pagado
+
+# Constantes de estatus_detalle de PedidoItem
+ESTATUS_ITEM_EN_COCINA = 1   # Item creado, inventario consumido
+ESTATUS_ITEM_LISTO = 2       # Preparado por cocina
+ESTATUS_ITEM_COMPLETO = 3    # Entregado al cliente
+ESTATUS_ITEM_CANCELADO = 4   # Cancelado
+ESTATUS_ITEM_PAGADO = 5      # Pagado
 
 
 class PedidoDAO:
@@ -35,7 +63,7 @@ class PedidoDAO:
         notas: str = None
     ) -> dict:
         """
-        Crear nuevo pedido en estado 1=Creado (sin items aún)
+        Crear nuevo pedido en estado 0=Iniciado (sin items aún)
         
         Args:
             sucursal_id: ID de sucursal
@@ -52,8 +80,9 @@ class PedidoDAO:
         """
         with get_db_session() as session:
             try:
-                # Generar folio único
-                folio = f"PED{sucursal_id}{datetime.utcnow().strftime('%Y%m%d%H%M%S')}{str(uuid.uuid4())[:6].upper()}"
+                # Generar folio único (18 caracteres)
+                # Formato: PED-YYYYMMDDHHmmss
+                folio = f"PED-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
                 
                 # Validar reserva existe
                 reserva = session.query(Reserva).filter_by(id_reserva=reserva_id).first()
@@ -69,7 +98,7 @@ class PedidoDAO:
                     reserva_id=reserva_id,
                     mesa_id=mesa_id,
                     inicia_usuario_id=inicia_usuario_id,
-                    estado_pedido=1,  # Creado
+                    estado_pedido=ESTADO_INICIADO,  # 0 = Iniciado
                     notas=notas
                 )
                 
@@ -124,8 +153,9 @@ class PedidoDAO:
                 if not pedido:
                     raise ValueError(f"Pedido {pedido_id} no existe")
                 
-                if pedido.estado_pedido != 1:
-                    raise ValueError(f"Solo se pueden agregar items a pedidos en estado Creado (1)")
+                # Solo se puede agregar items a pedidos en estado Iniciado (0) o Completo (3) antes de pagar
+                if pedido.estado_pedido not in [ESTADO_INICIADO, ESTADO_COMPLETO]:
+                    raise ValueError(f"Solo se pueden agregar items a pedidos en estado Iniciado (0) o Completo (3)")
                 
                 # Obtener precio si no viene
                 if precio_unit is None:
@@ -148,6 +178,7 @@ class PedidoDAO:
                     combo_id=combo_id,
                     cantidad=cantidad,
                     precio_unit=precio_unit,
+                    estatus_detalle=ESTATUS_ITEM_EN_COCINA,  # 1 = EnCocina (items van directo)
                     notas=notas
                 )
                 
@@ -173,14 +204,22 @@ class PedidoDAO:
     @staticmethod
     def cambiar_estado_pedido(pedido_id: int, nuevo_estado: int, usuario_id: int = None, comentario: str = None) -> dict:
         """
-        Cambia el estado del pedido y registra en historial
+        Cambia el estado del pedido y registra en historial.
+        
+        Sistema de estados:
+            0 = Iniciado (pedido recién creado)
+            3 = Completo (usuario cierra pedido)
+            4 = Cancelado
+            5 = Pagado
         
         Transiciones válidas:
-            1 → 2, 6
-            2 → 3, 6
-            3 → 4, 6
-            4 → 5, 6
-            5 → 6
+            0 → 3, 4 (Iniciado → Completo, Cancelado)
+            3 → 4, 5 (Completo → Cancelado, Pagado)
+            4 → (nada, estado final)
+            5 → (nada, estado final)
+        
+        NOTA: El consumo de inventario NO ocurre aquí.
+        Ocurre cuando PedidoItem se crea (estatus_detalle=1 EnCocina).
         
         Args:
             pedido_id: ID del pedido
@@ -200,24 +239,16 @@ class PedidoDAO:
                 # Validar transición
                 estado_actual = pedido.estado_pedido
                 transiciones_validas = {
-                    1: [2, 6],
-                    2: [3, 6],
-                    3: [4, 6],
-                    4: [5, 6],
-                    5: [6],
-                    6: []
+                    ESTADO_INICIADO: [ESTADO_COMPLETO, ESTADO_CANCELADO],   # 0 → 3, 4
+                    ESTADO_COMPLETO: [ESTADO_CANCELADO, ESTADO_PAGADO],     # 3 → 4, 5
+                    ESTADO_CANCELADO: [],                                    # 4 → nada
+                    ESTADO_PAGADO: []                                        # 5 → nada
                 }
                 
                 if nuevo_estado not in transiciones_validas.get(estado_actual, []):
                     raise ValueError(
                         f"Transición no válida: {estado_actual} → {nuevo_estado}"
                     )
-                
-                # Si estado=2 (Confirmado) no tiene items, rechazar
-                if nuevo_estado == 2:
-                    items_count = session.query(PedidoItem).filter_by(pedido_id=pedido_id).count()
-                    if items_count == 0:
-                        raise ValueError("Pedido debe tener al menos 1 item para confirmar")
                 
                 # Registrar histórico
                 hist = PedidoEstadoHist(
@@ -239,6 +270,7 @@ class PedidoDAO:
                 return {
                     'id_pedido': pedido_id,
                     'estado_pedido': nuevo_estado,
+                    'estado_anterior': estado_actual,
                     'updated_at': pedido.updated_at.isoformat()
                 }
             
@@ -251,11 +283,30 @@ class PedidoDAO:
     @staticmethod
     def obtener_pedido_completo(pedido_id: int) -> dict:
         """
-        Obtiene pedido con items e histórico de cambios
+        Obtiene pedido con items e histórico de cambios.
         
         Returns:
             Dict con pedido completo o None
         """
+        # Mapas de estados para display
+        estado_pedido_map = {
+            0: 'Iniciado',
+            1: 'EnCocina',
+            2: 'Listo',
+            3: 'Completo',
+            4: 'Cancelado',
+            5: 'Pagado'
+        }
+        
+        estatus_item_map = {
+            0: 'Iniciado',
+            1: 'EnCocina',
+            2: 'Listo',
+            3: 'Completo',
+            4: 'Cancelado',
+            5: 'Pagado'
+        }
+        
         with get_db_session() as session:
             try:
                 pedido = session.query(Pedido).filter_by(id_pedido=pedido_id).first()
@@ -276,6 +327,7 @@ class PedidoDAO:
                     'mesa_id': pedido.mesa_id,
                     'inicia_usuario_id': pedido.inicia_usuario_id,
                     'estado_pedido': pedido.estado_pedido,
+                    'estado_pedido_nombre': estado_pedido_map.get(pedido.estado_pedido, 'Desconocido'),
                     'notas': pedido.notas,
                     'created_at': pedido.created_at.isoformat() if pedido.created_at else None,
                     'updated_at': pedido.updated_at.isoformat() if pedido.updated_at else None,
@@ -286,6 +338,8 @@ class PedidoDAO:
                             'combo_id': item.combo_id,
                             'cantidad': item.cantidad,
                             'precio_unit': str(item.precio_unit),
+                            'estatus_detalle': item.estatus_detalle,
+                            'estatus_detalle_nombre': estatus_item_map.get(item.estatus_detalle, 'Desconocido'),
                             'notas': item.notas,
                             'created_at': item.created_at.isoformat() if item.created_at else None
                         }
@@ -295,6 +349,7 @@ class PedidoDAO:
                         {
                             'id_pedido_estado_hist': h.id_pedido_estado_hist,
                             'estado_pedido': h.estado_pedido,
+                            'estado_pedido_nombre': estado_pedido_map.get(h.estado_pedido, 'Desconocido'),
                             'usuario_id': h.usuario_id,
                             'created_at': h.created_at.isoformat() if h.created_at else None,
                             'comentario': h.comentario
@@ -310,9 +365,18 @@ class PedidoDAO:
     
     @staticmethod
     def listar_pedidos_por_sucursal(sucursal_id: int, fecha_desde=None, fecha_hasta=None, 
-                                     estado=None, offset=0, limit=50):
+                                     estado=None, tipo_pedido=None, offset=0, limit=50):
         """
         Lista pedidos de una sucursal con filtros opcionales
+        
+        Args:
+            sucursal_id: ID de la sucursal
+            fecha_desde: Fecha mínima (opcional)
+            fecha_hasta: Fecha máxima (opcional)
+            estado: Estado del pedido (opcional): 0=Iniciado, 3=Completo, 4=Cancelado, 5=Pagado
+            tipo_pedido: Tipo de pedido (opcional): 1=Dine-in, 2=Takeaway
+            offset: Paginación offset
+            limit: Paginación limit
         
         Returns:
             tuple: (lista de pedidos, total)
@@ -325,8 +389,10 @@ class PedidoDAO:
                     query = query.filter(Pedido.created_at >= fecha_desde)
                 if fecha_hasta:
                     query = query.filter(Pedido.created_at <= fecha_hasta)
-                if estado:
+                if estado is not None:
                     query = query.filter(Pedido.estado_pedido == estado)
+                if tipo_pedido is not None:
+                    query = query.filter(Pedido.tipo_pedido == tipo_pedido)
                 
                 total = query.count()
                 

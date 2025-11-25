@@ -1,12 +1,50 @@
 """
-Pedido Model - Pedido, PedidoItem, PedidoEstadoHist
+Pedido Model - Pedido, PedidoEstadoHist
 operaciones.Pedido - Centro de operaciones para pedidos
+
+Sistema de Estados de Pedido (estado_pedido):
+    0 = Iniciado (pedido recién creado, items se agregan en EnCocina directamente)
+    1 = (reservado para items EnCocina)
+    2 = (reservado para items Listo)
+    3 = Completo (usuario cierra el pedido)
+    4 = Cancelado
+    5 = Pagado
+
+Flujo Pedido: 0 (crear) → 3 (cerrar) → 5 (pagar)
+Flujo Items:  1 (crear+inventario) → 2 (cocina listo) → 3 (cerrar) → 5 (pagar)
+
+NOTA: PedidoItem está en pedido_item_model.py para evitar duplicados
 """
 
 from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Numeric, Index, text, SMALLINT
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from src.models.base import Base, BaseModel
+
+# Constantes de estado de Pedido
+ESTADO_INICIADO = 0     # Pedido recién creado
+ESTADO_COMPLETO = 3     # Pedido cerrado por usuario
+ESTADO_CANCELADO = 4    # Pedido cancelado
+ESTADO_PAGADO = 5       # Pedido pagado
+
+# Mapas de estados para display
+ESTADO_PEDIDO_MAP = {
+    0: 'Iniciado',
+    3: 'Completo',
+    4: 'Cancelado',
+    5: 'Pagado'
+}
+
+# Re-exportar constantes de PedidoItem para compatibilidad
+from src.models.operaciones.pedido_item_model import (
+    ESTATUS_ITEM_EN_COCINA,
+    ESTATUS_ITEM_LISTO,
+    ESTATUS_ITEM_COMPLETO,
+    ESTATUS_ITEM_CANCELADO,
+    ESTATUS_ITEM_PAGADO,
+    ESTATUS_ITEM_MAP,
+    PedidoItem
+)
 
 
 class Pedido(BaseModel):
@@ -29,7 +67,7 @@ class Pedido(BaseModel):
     reserva_id = Column(Integer, ForeignKey('operaciones.Reserva.id_reserva'), nullable=False)
     mesa_id = Column(Integer, ForeignKey('catalogos.Mesa.id_mesa'), nullable=True)  # NULL para takeaway
     inicia_usuario_id = Column(Integer, ForeignKey('seguridad.Usuario.id_usuario'), nullable=False)
-    estado_pedido = Column(SMALLINT, nullable=False, default=1)  # 1=Creado,2=Confirmado,3=EnPreparacion,4=Listo,5=Entregado,6=Cancelado
+    estado_pedido = Column(SMALLINT, nullable=False, default=ESTADO_INICIADO)  # 0=Iniciado,3=Completo,4=Cancelado,5=Pagado
     notas = Column(String(100), nullable=True)
     created_at = Column(DateTime, server_default=text('SYSUTCDATETIME()'), nullable=False)
     updated_at = Column(DateTime, onupdate=func.now())
@@ -44,32 +82,8 @@ class Pedido(BaseModel):
     estado_hist = relationship("PedidoEstadoHist", back_populates="pedido", cascade="all, delete-orphan")
     
     def __repr__(self):
-        return f"<Pedido {self.id_pedido}: {self.folio} (Estado={self.estado_pedido})>"
-
-
-class PedidoItem(BaseModel):
-    """Modelo para PedidoItem (Línea de Pedido)"""
-    __tablename__ = 'PedidoItem'
-    __table_args__ = (
-        Index('IX_PedidoItem_Pedido', 'pedido_id'),
-        {'schema': 'operaciones'}
-    )
-    
-    id_pedido_item = Column(Integer, primary_key=True)
-    pedido_id = Column(Integer, ForeignKey('operaciones.Pedido.id_pedido'), nullable=False)
-    producto_id = Column(Integer, ForeignKey('catalogos.Producto.id_producto'), nullable=True)
-    combo_id = Column(Integer, ForeignKey('catalogos.Combo.id_combo'), nullable=True)
-    cantidad = Column(Integer, nullable=False, default=1)
-    precio_unit = Column(Numeric(12, 2), nullable=False)
-    notas = Column(String(100), nullable=True)
-    created_at = Column(DateTime, server_default=text('SYSUTCDATETIME()'), nullable=False)
-    updated_at = Column(DateTime, onupdate=func.now())
-    
-    # Relaciones
-    pedido = relationship("Pedido", back_populates="items")
-    
-    def __repr__(self):
-        return f"<PedidoItem pedido={self.pedido_id}, producto={self.producto_id}, combo={self.combo_id}, cant={self.cantidad}>"
+        estado_str = ESTADO_PEDIDO_MAP.get(self.estado_pedido, 'Desconocido')
+        return f"<Pedido {self.id_pedido}: {self.folio} ({estado_str})>"
 
 
 class PedidoEstadoHist(BaseModel):

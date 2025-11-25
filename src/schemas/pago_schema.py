@@ -1,5 +1,8 @@
 """
 Schemas para Pago - Validación con Marshmallow
+
+Columnas disponibles en pagos.Pago:
+  id_pago, pedido_id, sucursal_id, monto, propina, moneda, estatus, usuario_id, created_at, updated_at
 """
 
 from marshmallow import Schema, fields, validates, ValidationError
@@ -10,9 +13,10 @@ from src.schemas.helpers import FormattedDateTime
 class PagoCreateSchema(Schema):
     """Schema para crear/registrar pago"""
     pedido_id = fields.Int(required=True)
+    sucursal_id = fields.Int(required=True)
     monto = fields.Decimal(required=True, as_string=False)
-    propina = fields.Decimal(required=False, default=Decimal('0.00'), as_string=False)
-    moneda = fields.Str(required=False, default='MXN')
+    propina = fields.Decimal(required=False, load_default=Decimal('0.00'), as_string=False)
+    moneda = fields.Str(required=False, load_default='MXN')
     
     @validates('monto')
     def validate_monto(self, value):
@@ -21,7 +25,7 @@ class PagoCreateSchema(Schema):
     
     @validates('propina')
     def validate_propina(self, value):
-        if value < Decimal('0.00'):
+        if value is not None and value < Decimal('0.00'):
             raise ValidationError("propina no puede ser negativa")
     
     @validates('moneda')
@@ -31,17 +35,8 @@ class PagoCreateSchema(Schema):
 
 
 class PagoMarcarPagadoSchema(Schema):
-    """Schema para marcar pedido como pagado"""
-    pedido_id = fields.Int(required=True)
-    monto_total = fields.Decimal(required=True, as_string=False)
-    propina = fields.Decimal(required=False, default=Decimal('0.00'), as_string=False)
-    metodo_pago = fields.Str(required=False, default='efectivo')  # efectivo, tarjeta, etc
-    referencia = fields.Str(required=False, allow_none=True)  # Referencia de transacción
-    
-    @validates('monto_total')
-    def validate_monto_total(self, value):
-        if value <= Decimal('0.00'):
-            raise ValidationError("monto_total debe ser mayor a 0")
+    """Schema para marcar pago como pagado (vacío, no requiere datos extra)"""
+    pass
 
 
 class PagoResponseSchema(Schema):
@@ -70,8 +65,8 @@ class PagoResponseSchema(Schema):
     def get_estatus_display(self, obj):
         """Retorna nombre legible del estatus"""
         estatus_map = {
-            1: "Registrado",
-            2: "Confirmado",
-            3: "Revertido"
+            1: "Pendiente",
+            2: "Pagado",
+            3: "Anulado"
         }
         return estatus_map.get(obj.get('estatus'), "Desconocido")

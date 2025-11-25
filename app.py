@@ -40,6 +40,8 @@ from src.controller.ReservaController import reserva_bp
 from src.controller.MesaEstatusController import mesa_estatus_bp
 from src.controller.JobsController import jobs_bp
 from src.controller.PushNotificationController import bp as push_notifications_bp
+from src.controller.CampaniaController import bp as campanias_bp
+from src.controller.CocinaController import bp as cocina_bp
  
 def create_app():
   app = Flask(__name__)
@@ -101,6 +103,8 @@ def create_app():
   app.register_blueprint(mesa_estatus_bp)
   app.register_blueprint(jobs_bp)
   app.register_blueprint(push_notifications_bp)
+  app.register_blueprint(campanias_bp)
+  app.register_blueprint(cocina_bp)
 
   @app.route('/health')
   def health_check():

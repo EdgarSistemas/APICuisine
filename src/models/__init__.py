@@ -85,6 +85,12 @@ from .rrhh import (
     SolicitudVacaciones
 )
 
+# Modelos de Marketing (CRM)
+from .marketing import (
+    Campania,
+    CampaniaUsuario
+)
+
 __all__ = [
     # Base
     'Base',
@@ -150,5 +156,9 @@ __all__ = [
     'UsuarioHorario',
     'TurnoClave',
     'Asistencia',
-    'SolicitudVacaciones'
+    'SolicitudVacaciones',
+    
+    # Modelos de Marketing (CRM)
+    'Campania',
+    'CampaniaUsuario'
 ]

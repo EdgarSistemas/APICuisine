@@ -16,6 +16,8 @@ from .CategoriaMenuController import bp as categorias_bp
 from .ProductoController import bp as productos_bp
 from .ComboController import bp as combos_bp
 from .ProductoRecetaController import bp as recetas_bp
+from .CampaniaController import bp as campanias_bp
+from .CocinaController import bp as cocina_bp
 
 __all__ = [
     'auth_bp',
@@ -30,5 +32,7 @@ __all__ = [
     'categorias_bp',
     'productos_bp',
     'combos_bp',
-    'recetas_bp'
+    'recetas_bp',
+    'campanias_bp',
+    'cocina_bp'
 ]

@@ -1,6 +1,20 @@
 """
 PagoController - Gestión de Pagos
-Endpoints: POST (crear), POST (marcar pagado), GET (listar), GET/{id}
+
+Endpoints:
+  POST /api/pagos              - Crear pago (marca pedido e items como PAGADO)
+  POST /api/pagos/listar       - Listar pagos (filtros en body)
+  GET  /api/pagos/{id}         - Obtener pago por ID
+  PUT  /api/pagos/{id}         - Actualizar pago (propina)
+  DELETE /api/pagos/{id}       - Cancelar pago (admin)
+  POST /api/pagos/pendientes   - Listar pedidos pendientes de pago
+
+Flujo simplificado:
+  Al crear pago con POST /api/pagos:
+  - Pago se crea en estatus 2 (Pagado)
+  - Pedido transiciona a 5 (Pagado)
+  - Items transicionan a 5 (Pagado)
+  - Reserva (si existe) a 3 (Completada)
 """
 
 from flask import Blueprint, request, jsonify
@@ -8,17 +22,13 @@ from flask_jwt_extended import jwt_required, get_jwt_identity
 from marshmallow import ValidationError
 import logging
 
+from src.core.db.session_manager import get_db_session
 from src.services.operaciones.pago_service import PagoService
-from src.schemas.pago_schema import (
-    PagoCreateSchema,
-    PagoMarcarPagadoSchema
-)
+from src.schemas.pago_schema import PagoCreateSchema
 from src.core.utils.multitenant import (
     es_admin,
     validar_acceso_sucursal,
-    agregar_filtro_sucursal,
-    validar_pertenencia_sucursal,
-    validar_sucursal_existe
+    obtener_sucursales_usuario
 )
 from src.models import Pago, Pedido
 
@@ -33,12 +43,18 @@ bp = Blueprint('pagos', __name__, url_prefix='/api/pagos')
 @jwt_required()
 def crear_pago():
     """
-    Crear registro de pago para un pedido completado.
+    Crear registro de pago - AUTOMÁTICAMENTE MARCA PEDIDO COMO PAGADO.
     ---
     tags:
       - Pagos
-    summary: "Paso 1: Crear Pago"
-    description: Registra un nuevo pago para un pedido completado. El pago inicialmente está en estado Pendiente (1). Posteriormente se marca como Pagado (2) cuando se confirma el método de pago.
+    summary: Crear Pago
+    description: |
+      Registra un pago para un pedido completado (estado 3).
+      Automáticamente transiciona:
+      - Pago: estatus 2 (Pagado)
+      - Pedido: 3 (Completo) → 5 (Pagado)
+      - Items: → 5 (Pagado)
+      - Reserva: 2 (EnCurso) → 3 (Completada) si existe
     parameters:
       - in: body
         name: body
@@ -52,120 +68,55 @@ def crear_pago():
           properties:
             pedido_id:
               type: integer
-              description: "ID del pedido para el cual se crea el pago. Ej: 25"
             sucursal_id:
               type: integer
-              description: "ID de la sucursal. Ej: 1"
             monto:
               type: number
-              description: "Monto total del pago (sin incluir propina). Ej: 450.50"
             propina:
               type: number
-              description: "Monto de propina (opcional, default: 0). Ej: 50.00"
               default: 0
             moneda:
               type: string
-              description: "Código de moneda (default: MXN). Ej: MXN, USD, EUR"
               default: "MXN"
-        example:
-          pedido_id: 25
-          sucursal_id: 1
-          monto: 450.50
-          propina: 50.00
-          moneda: "MXN"
     responses:
       201:
-        description: "Pago creado exitosamente"
-        schema:
-          type: object
-          properties:
-            message:
-              type: string
-              example: "Pago creado exitosamente"
-            pago:
-              type: object
-              properties:
-                id_pago:
-                  type: integer
-                  example: 15
-                pedido_id:
-                  type: integer
-                  example: 25
-                sucursal_id:
-                  type: integer
-                  example: 1
-                monto:
-                  type: number
-                  example: 450.50
-                propina:
-                  type: number
-                  example: 50.00
-                total:
-                  type: number
-                  example: 500.50
-                moneda:
-                  type: string
-                  example: "MXN"
-                estatus:
-                  type: integer
-                  example: 1
-                  description: "1=Pendiente, 2=Pagado"
-                created_at:
-                  type: string
-                  format: date-time
+        description: Pago creado y pedido marcado como pagado
       400:
-        description: "Validación fallida"
+        description: Validación fallida o pedido no está en estado Completo
       403:
-        description: "Sin acceso a la sucursal"
+        description: Sin acceso a la sucursal
       404:
-        description: "Pedido no existe"
-    x-code-samples:
-      - lang: curl
-        source: |
-          curl -X POST http://localhost:5000/api/pagos/ \\
-            -H "Content-Type: application/json" \\
-            -H "Authorization: Bearer YOUR_JWT_TOKEN" \\
-            -d '{
-              "pedido_id": 25,
-              "sucursal_id": 1,
-              "monto": 450.50,
-              "propina": 50.00,
-              "moneda": "MXN"
-            }'
+        description: Pedido no existe
     """
     try:
-        # Validar schema
         schema = PagoCreateSchema()
         data = schema.load(request.json)
         
         current_user = get_jwt_identity()
-        usuario_id = current_user.get('id_usuario')
         
         # Verificar acceso a sucursal
-        if not validar_acceso_sucursal(usuario_id, data['sucursal_id']):
+        if not validar_acceso_sucursal(current_user, data['sucursal_id']):
             return jsonify({"error": "No tienes acceso a esta sucursal"}), 403
         
-        # Usar servicio para crear pago
         result = PagoService.crear_pago(
             pedido_id=data['pedido_id'],
             sucursal_id=data['sucursal_id'],
             monto=data['monto'],
             propina=data.get('propina', 0),
             moneda=data.get('moneda', 'MXN'),
-            usuario_id=usuario_id
+            usuario_id=current_user
         )
         
         if not result['success']:
             if 'no existe' in result.get('error', ''):
                 return jsonify({"error": result['error']}), 404
-            elif 'mismatch' in result.get('error', ''):
-                return jsonify({"error": result['error']}), 400
             else:
                 return jsonify({"error": result['error']}), 400
         
         return jsonify({
-            "message": "Pago creado exitosamente",
-            "pago": result['data']
+            "message": "Pago creado exitosamente - Pedido marcado como PAGADO",
+            "pago": result['data'],
+            "transiciones": result.get('transiciones', {})
         }), 201
         
     except ValidationError as e:
@@ -177,97 +128,83 @@ def crear_pago():
 
 
 # ============================================================================
-# GET /api/pagos - Listar Pagos
+# POST /api/pagos/listar - Listar Pagos
 # ============================================================================
-@bp.route('', methods=['GET'])
+@bp.route('/listar', methods=['POST'])
 @jwt_required()
-def obtener_pagos():
+def listar_pagos():
     """
-    Listar todos los pagos registrados con filtros opcionales.
+    Listar pagos con filtros opcionales en body.
     ---
     tags:
       - Pagos
-    summary: "Paso 1B: Listar Pagos"
-    description: Lista todos los pagos con posibilidad de filtrar por sucursal y pedido. Solo retorna pagos de la sucursal del usuario autenticado (multi-tenant). Útil para reportes y auditoría financiera.
+    summary: Listar Pagos
+    description: Lista pagos con filtros opcionales. Todos los parámetros van en body.
     parameters:
-      - in: query
-        name: sucursal_id
-        type: integer
-        required: false
-        description: "Filtrar por sucursal (opcional). Ej: ?sucursal_id=1"
-      - in: query
-        name: pedido_id
-        type: integer
-        required: false
-        description: "Filtrar por pedido (opcional). Ej: ?pedido_id=25"
-    responses:
-      200:
-        description: "Lista de pagos obtenida exitosamente"
+      - in: body
+        name: body
         schema:
           type: object
           properties:
-            pagos:
-              type: array
-              items:
-                type: object
-                properties:
-                  id_pago:
-                    type: integer
-                  pedido_id:
-                    type: integer
-                  monto:
-                    type: number
-                  propina:
-                    type: number
-                  total:
-                    type: number
-                  estatus:
-                    type: integer
-                    description: "1=Pendiente, 2=Pagado"
-                  metodo_pago:
-                    type: string
-                  created_at:
-                    type: string
-                    format: date-time
-            total:
+            sucursal_id:
               type: integer
-              description: "Cantidad total de pagos que coinciden con los filtros"
-    x-code-samples:
-      - lang: curl
-        source: |
-          # Listar todos los pagos
-          curl -X GET http://localhost:5000/api/pagos/ \\
-            -H "Authorization: Bearer YOUR_JWT_TOKEN"
-
-          # Listar pagos de la sucursal 1
-          curl -X GET "http://localhost:5000/api/pagos/?sucursal_id=1" \\
-            -H "Authorization: Bearer YOUR_JWT_TOKEN"
+              description: "Filtrar por sucursal (opcional)"
+            pedido_id:
+              type: integer
+              description: "Filtrar por pedido (opcional)"
+            estatus:
+              type: integer
+              description: "1=Pendiente, 2=Pagado, 3=Anulado (opcional)"
+    responses:
+      200:
+        description: Lista de pagos
     """
     try:
         current_user = get_jwt_identity()
-        usuario_id = current_user.get('id_usuario')
+        payload = request.get_json() or {}
         
-        from src.core.db.session_manager import get_db_session
+        sucursal_id = payload.get('sucursal_id')
+        pedido_id = payload.get('pedido_id')
+        estatus = payload.get('estatus')
+        
+        # Validar acceso a sucursal si se especifica
+        if sucursal_id:
+            if not validar_acceso_sucursal(current_user, sucursal_id):
+                return jsonify({"error": "Sin acceso a esta sucursal"}), 403
+        else:
+            # Usar sucursales del usuario
+            sucursales = obtener_sucursales_usuario(current_user)
+            if not sucursales:
+                return jsonify({"error": "Usuario sin sucursal asignada"}), 403
+        
         with get_db_session() as session:
             query = session.query(Pago)
             
-            # Aplicar filtro multi-tenant
-            query = agregar_filtro_sucursal(query, Pago, usuario_id)
-            
-            # Filtros opcionales
-            sucursal_id = request.args.get('sucursal_id', type=int)
+            # Filtrar por sucursal
             if sucursal_id:
                 query = query.filter(Pago.sucursal_id == sucursal_id)
+            else:
+                sucursales = obtener_sucursales_usuario(current_user)
+                if sucursales:
+                    query = query.filter(Pago.sucursal_id.in_(sucursales))
             
-            pedido_id = request.args.get('pedido_id', type=int)
+            # Filtros opcionales
             if pedido_id:
                 query = query.filter(Pago.pedido_id == pedido_id)
+            
+            if estatus:
+                query = query.filter(Pago.estatus == estatus)
             
             pagos = query.order_by(Pago.created_at.desc()).all()
             
             return jsonify({
                 "pagos": [p.to_dict() for p in pagos],
-                "total": len(pagos)
+                "total": len(pagos),
+                "filtros_aplicados": {
+                    "sucursal_id": sucursal_id,
+                    "pedido_id": pedido_id,
+                    "estatus": estatus
+                }
             }), 200
             
     except Exception as e:
@@ -282,74 +219,26 @@ def obtener_pagos():
 @jwt_required()
 def obtener_pago(pago_id):
     """
-    Obtener detalles de un pago específico por ID.
+    Obtener detalles de un pago específico.
     ---
     tags:
       - Pagos
-    summary: "Paso 1C: Obtener Pago"
-    description: Obtiene la información completa de un pago específico incluyendo monto, propina, método de pago y auditoría.
+    summary: Obtener Pago
     parameters:
       - in: path
         name: pago_id
         type: integer
         required: true
-        description: "ID del pago a consultar. Ej: 15"
     responses:
       200:
-        description: "Pago encontrado exitosamente"
-        schema:
-          type: object
-          properties:
-            id_pago:
-              type: integer
-              example: 15
-            pedido_id:
-              type: integer
-              example: 25
-            sucursal_id:
-              type: integer
-              example: 1
-            monto:
-              type: number
-              example: 450.50
-            propina:
-              type: number
-              example: 50.00
-            total:
-              type: number
-              example: 500.50
-            moneda:
-              type: string
-              example: "MXN"
-            estatus:
-              type: integer
-              example: 1
-              description: "1=Pendiente, 2=Pagado"
-            metodo_pago:
-              type: string
-              example: null
-            referencia:
-              type: string
-              example: null
-            created_at:
-              type: string
-              format: date-time
-            updated_at:
-              type: string
-              format: date-time
+        description: Pago encontrado
       403:
-        description: "Sin acceso a la sucursal"
+        description: Sin acceso a la sucursal
       404:
-        description: "Pago no existe"
-    x-code-samples:
-      - lang: curl
-        source: |
-          curl -X GET http://localhost:5000/api/pagos/15 \\
-            -H "Authorization: Bearer YOUR_JWT_TOKEN"
+        description: Pago no existe
     """
     try:
         current_user = get_jwt_identity()
-        usuario_id = current_user.get('id_usuario')
         
         result = PagoService.obtener_pago(pago_id)
         
@@ -358,7 +247,7 @@ def obtener_pago(pago_id):
         
         # Validar acceso a sucursal
         sucursal_id = result['data'].get('sucursal_id')
-        if not validar_acceso_sucursal(usuario_id, sucursal_id):
+        if not validar_acceso_sucursal(current_user, sucursal_id):
             return jsonify({"error": "No tienes acceso a esta sucursal"}), 403
         
         return jsonify(result['data']), 200
@@ -369,226 +258,43 @@ def obtener_pago(pago_id):
 
 
 # ============================================================================
-# POST /api/pagos/{pago_id}/marcar-pagado - Marcar Pago Completado
-# ============================================================================
-@bp.route('/<int:pago_id>/marcar-pagado', methods=['POST'])
-@jwt_required()
-def marcar_pagado(pago_id):
-    """
-    Marcar pago como completado - TRANSICIONA PEDIDO A PAGADO.
-    ---
-    tags:
-      - Pagos
-    summary: "Paso 2: Marcar Pago como Pagado (CRITICAL)"
-    description: |
-      **⚠️ OPERACIÓN CRÍTICA ⚠️**
-      
-      Marca el pago como completado (estatus 1→2).
-      Automáticamente transiciona el pedido asociado a estatus PAGADO (5).
-      
-      IMPORTANTE:
-      - Cierra la transacción del cliente
-      - Actualiza inventario en reportes
-      - Registra en auditoría financiera
-      - Es el paso final del flujo completo
-    parameters:
-      - in: path
-        name: pago_id
-        type: integer
-        required: true
-        description: "ID del pago. Ej: 15"
-      - in: body
-        name: body
-        required: true
-        schema:
-          type: object
-          required:
-            - metodo_pago
-          properties:
-            metodo_pago:
-              type: string
-              description: "Método de pago usado. Ej: Efectivo, Tarjeta, QR, Transferencia"
-            referencia:
-              type: string
-              description: "Número de transacción o referencia (opcional). Ej: TXN123456789"
-        example:
-          metodo_pago: "Tarjeta"
-          referencia: "TXN123456789"
-    responses:
-      200:
-        description: "Pago marcado como completado y pedido transitado a pagado"
-        schema:
-          type: object
-          properties:
-            message:
-              type: string
-              example: "Pago marcado como completado"
-            pago:
-              type: object
-              properties:
-                id_pago:
-                  type: integer
-                  example: 15
-                pedido_id:
-                  type: integer
-                  example: 25
-                monto:
-                  type: number
-                  example: 450.50
-                propina:
-                  type: number
-                  example: 50.00
-                total:
-                  type: number
-                  example: 500.50
-                estatus:
-                  type: integer
-                  example: 2
-                  description: "2=Pagado"
-                metodo_pago:
-                  type: string
-                  example: "Tarjeta"
-                referencia:
-                  type: string
-                  example: "TXN123456789"
-                updated_at:
-                  type: string
-                  format: date-time
-      400:
-        description: "Validación fallida"
-        schema:
-          type: object
-          properties:
-            error:
-              type: string
-      404:
-        description: "Pago no existe"
-        schema:
-          type: object
-          properties:
-            error:
-              type: string
-              example: "Pago 15 no existe"
-    x-validation-notes: |
-      VALIDACIONES INTERNAS:
-      1. Pago debe existir y estar Pendiente (estatus=1)
-      2. Pedido debe existir y estar Completado (estado=3)
-      3. Ambos en la misma sucursal
-      
-      TRANSICIONES AUTOMÁTICAS:
-      - Pago: 1 (Pendiente) → 2 (Pagado)
-      - Pedido: 3 (Completado) → 5 (Pagado)
-      
-      FLUJO COMPLETO FINALIZADO:
-      Hold (confirmado) → Reserva (completada) → Pedido (pagado) → Pago (pagado) ✅
-    x-code-samples:
-      - lang: curl
-        source: |
-          curl -X POST http://localhost:5000/api/pagos/15/marcar-pagado \\
-            -H "Content-Type: application/json" \\
-            -H "Authorization: Bearer YOUR_JWT_TOKEN" \\
-            -d '{
-              "metodo_pago": "Tarjeta",
-              "referencia": "TXN123456789"
-            }'
-    """
-    try:
-        schema = PagoMarcarPagadoSchema()
-        data = schema.load(request.json)
-        
-        current_user = get_jwt_identity()
-        usuario_id = current_user.get('id_usuario')
-        
-        result = PagoService.marcar_pagado(
-            pago_id=pago_id,
-            metodo_pago=data['metodo_pago'],
-            referencia=data.get('referencia'),
-            usuario_id=usuario_id
-        )
-        
-        if not result['success']:
-            if 'no existe' in result.get('error', ''):
-                return jsonify({"error": result['error']}), 404
-            else:
-                return jsonify({"error": result['error']}), 400
-        
-        return jsonify({
-            "message": "Pago marcado como completado",
-            "pago": result['data']
-        }), 200
-        
-    except ValidationError as e:
-        logger.error(f"Error de validación en marcar_pagado: {e.messages}")
-        return jsonify({"error": "Datos inválidos", "detalles": e.messages}), 400
-    except Exception as e:
-        logger.error(f"Error en marcar_pagado: {str(e)}")
-        return jsonify({"error": f"Error interno: {str(e)}"}), 500
-
-
-# ============================================================================
-# PUT /api/pagos/{pago_id} - Actualizar Pago (propina, etc)
+# PUT /api/pagos/{pago_id} - Actualizar Pago (propina)
 # ============================================================================
 @bp.route('/<int:pago_id>', methods=['PUT'])
 @jwt_required()
 def actualizar_pago(pago_id):
     """
-    Actualizar datos del pago (propina, etc).
+    Actualizar datos del pago (propina).
     ---
     tags:
       - Pagos
-    summary: "Paso 2B: Actualizar Pago"
-    description: Permite actualizar campos del pago como propina antes de marcarlo como pagado. Útil si el cliente agrega propina después de crear el pago.
+    summary: Actualizar Pago
     parameters:
       - in: path
         name: pago_id
         type: integer
         required: true
-        description: "ID del pago. Ej: 15"
       - in: body
         name: body
-        required: true
         schema:
           type: object
           properties:
             propina:
               type: number
-              description: "Nueva cantidad de propina. Ej: 75.00"
-        example:
-          propina: 75.00
     responses:
       200:
-        description: "Pago actualizado exitosamente"
-        schema:
-          type: object
-          properties:
-            message:
-              type: string
-              example: "Pago actualizado"
-            pago:
-              type: object
+        description: Pago actualizado
       404:
-        description: "Pago no existe"
-      403:
-        description: "Sin acceso"
-    x-code-samples:
-      - lang: curl
-        source: |
-          curl -X PUT http://localhost:5000/api/pagos/15 \\
-            -H "Content-Type: application/json" \\
-            -H "Authorization: Bearer YOUR_JWT_TOKEN" \\
-            -d '{
-              "propina": 75.00
-            }'
+        description: Pago no existe
     """
     try:
         current_user = get_jwt_identity()
-        usuario_id = current_user.get('id_usuario')
         data = request.get_json()
         
         result = PagoService.actualizar_pago(
             pago_id=pago_id,
             propina=data.get('propina'),
-            usuario_id=usuario_id
+            usuario_id=current_user
         )
         
         if not result['success']:
@@ -608,7 +314,7 @@ def actualizar_pago(pago_id):
 
 
 # ============================================================================
-# DELETE /api/pagos/{pago_id} - Cancelar Pago (Soft Delete, SOLO ADMIN)
+# DELETE /api/pagos/{pago_id} - Cancelar Pago (SOLO ADMIN)
 # ============================================================================
 @bp.route('/<int:pago_id>', methods=['DELETE'])
 @jwt_required()
@@ -619,7 +325,7 @@ def eliminar_pago(pago_id):
     tags:
       - Pagos
     summary: Cancelar pago
-    description: Soft delete - cambia estatus a voided/cancelado. Solo admins.
+    description: Soft delete - cambia estatus a cancelado (3). Solo admins.
     parameters:
       - in: path
         name: pago_id
@@ -627,7 +333,7 @@ def eliminar_pago(pago_id):
         required: true
     responses:
       200:
-        description: Pago cancelado exitosamente
+        description: Pago cancelado
       403:
         description: Sin permisos
       404:
@@ -635,13 +341,11 @@ def eliminar_pago(pago_id):
     """
     try:
         current_user = get_jwt_identity()
-        usuario_id = current_user.get('id_usuario')
         
-        # Validar que es admin
-        if not es_admin(usuario_id):
+        if not es_admin(current_user):
             return jsonify({"error": "Solo administradores pueden cancelar pagos"}), 403
         
-        result = PagoService.cancelar_pago(pago_id, usuario_id)
+        result = PagoService.cancelar_pago(pago_id, current_user)
         
         if not result['success']:
             if 'no existe' in result.get('error', ''):
@@ -655,4 +359,68 @@ def eliminar_pago(pago_id):
             
     except Exception as e:
         logger.error(f"Error cancelando pago {pago_id}: {str(e)}")
+        return jsonify({"error": f"Error interno: {str(e)}"}), 500
+
+
+# ============================================================================
+# POST /api/pagos/pendientes - Listar Pedidos Pendientes de Pago
+# ============================================================================
+@bp.route('/pendientes', methods=['POST'])
+@jwt_required()
+def listar_pedidos_pendientes():
+    """
+    Listar pedidos en estado Completo (3) pendientes de pago.
+    ---
+    tags:
+      - Pagos
+    summary: Listar Pedidos Pendientes de Pago
+    description: |
+      Lista pedidos en estado Completo (3) listos para pagar.
+      Útil para vista de caja/cajero.
+    parameters:
+      - in: body
+        name: body
+        schema:
+          type: object
+          properties:
+            sucursal_id:
+              type: integer
+              description: "ID de la sucursal (opcional)"
+    responses:
+      200:
+        description: Lista de pedidos pendientes de pago
+      403:
+        description: Sin acceso a la sucursal
+    """
+    try:
+        current_user = get_jwt_identity()
+        payload = request.get_json() or {}
+        
+        sucursal_id = payload.get('sucursal_id')
+        
+        # Si no viene sucursal, usar la primera del usuario
+        if not sucursal_id:
+            sucursales = obtener_sucursales_usuario(current_user)
+            if not sucursales:
+                return jsonify({"error": "Usuario sin sucursal asignada"}), 403
+            sucursal_id = sucursales[0]
+        
+        # Validar acceso a sucursal
+        if not validar_acceso_sucursal(current_user, sucursal_id):
+            return jsonify({"error": "No tienes acceso a esta sucursal"}), 403
+        
+        result = PagoService.listar_pedidos_pendientes_pago(sucursal_id)
+        
+        if not result['success']:
+            return jsonify({"error": result['error']}), 500
+        
+        return jsonify({
+            "success": True,
+            "pedidos": result['data'],
+            "total": len(result['data']),
+            "sucursal_id": sucursal_id
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error listando pedidos pendientes: {str(e)}")
         return jsonify({"error": f"Error interno: {str(e)}"}), 500

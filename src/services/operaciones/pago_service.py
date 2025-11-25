@@ -1,17 +1,28 @@
 """
 PagoService - Lógica de negocio para Pagos
+
 Responsabilidades:
-- Crear pago ligado a pedido
-- Marcar pago como completado
-- Transicionar pedido a estatus PAGADO (5)
-- Validaciones de monto y pedido
+- Crear pago: automáticamente marca pedido e items como PAGADO (5)
+- Marcar reserva como completada (3) si existe
+
+Flujo simplificado:
+  POST /api/pagos -> Pago creado en estatus 2 (Pagado)
+                  -> Pedido transiciona a 5 (Pagado)
+                  -> Items transicionan a 5 (Pagado)
+                  -> Reserva (si existe) a 3 (Completada)
+
+Columnas disponibles en pagos.Pago:
+  id_pago, pedido_id, sucursal_id, monto, propina, moneda, estatus, usuario_id, created_at, updated_at
 """
 
 import logging
 from datetime import datetime
+from decimal import Decimal
 
 from src.core.db.session_manager import get_db_session
 from src.models import Pago, Pedido
+from src.models.operaciones.pedido_item_model import PedidoItem
+from src.models.operaciones.reserva_model import Reserva
 
 logger = logging.getLogger(__name__)
 
@@ -26,11 +37,13 @@ class PagoService:
     def crear_pago(pedido_id, sucursal_id, monto, propina=0, moneda='MXN', usuario_id=None):
         """
         Crear registro de pago para un pedido.
+        Automáticamente transiciona pedido e items a estado PAGADO (5).
+        Marca reserva como completada (3) si existe.
         
         Args:
             pedido_id (int): ID del pedido a pagar
             sucursal_id (int): ID de la sucursal
-            monto (float): Monto pagado
+            monto (float): Monto total del pedido
             propina (float): Propina (opcional)
             moneda (str): Moneda (MXN, USD, etc.)
             usuario_id (int): ID del cajero que registra el pago
@@ -53,6 +66,13 @@ class PagoService:
                         'error': 'Pedido no existe o no pertenece a esta sucursal'
                     }
                 
+                # Validar que pedido esté en Completo (3)
+                if pedido.estado_pedido != 3:
+                    return {
+                        'success': False,
+                        'error': f'Pedido debe estar en estado Completo (3), actualmente está en {pedido.estado_pedido}'
+                    }
+                
                 # Validar monto > 0
                 if monto <= 0:
                     logger.warning(f"Monto inválido: {monto}")
@@ -61,26 +81,60 @@ class PagoService:
                         'error': 'El monto debe ser mayor a 0'
                     }
                 
-                # Crear pago
+                # 1. Crear pago en estado PAGADO (2)
                 pago = Pago(
                     pedido_id=pedido_id,
                     sucursal_id=sucursal_id,
-                    monto=monto,
-                    propina=propina,
+                    monto=Decimal(str(monto)),
+                    propina=Decimal(str(propina)),
                     moneda=moneda,
-                    estatus=1,  # 1 = Pendiente
-                    usuario_id=usuario_id,
-                    created_at=datetime.utcnow()
+                    estatus=2,  # 2 = Pagado (directo)
+                    usuario_id=usuario_id
+                )
+                session.add(pago)
+                session.flush()
+                
+                # 2. Transicionar pedido a PAGADO (5)
+                pedido.estado_pedido = 5
+                pedido.updated_at = datetime.utcnow()
+                
+                # 3. Transicionar todos los items del pedido a PAGADO (5)
+                items_actualizados = session.query(PedidoItem).filter(
+                    PedidoItem.pedido_id == pedido.id_pedido,
+                    PedidoItem.estatus_detalle.in_([2, 3])  # Solo items Listo o Completo
+                ).update(
+                    {PedidoItem.estatus_detalle: 5},
+                    synchronize_session='fetch'
                 )
                 
-                session.add(pago)
+                # 4. Marcar reserva como completada si existe
+                reserva_completada = False
+                if pedido.reserva_id:
+                    reserva = session.query(Reserva).filter(
+                        Reserva.id_reserva == pedido.reserva_id
+                    ).first()
+                    
+                    if reserva and reserva.estatus == 2:  # 2 = EnCurso
+                        reserva.estatus = 3  # 3 = Completada
+                        reserva.updated_at = datetime.utcnow()
+                        reserva_completada = True
+                        logger.info(f"Reserva {reserva.id_reserva} marcada como Completada")
+                
                 session.commit()
                 
-                logger.info(f"Pago creado: ID={pago.id_pago}, Pedido={pedido_id}, Monto={monto}")
+                logger.info(
+                    f"Pago creado y completado: ID={pago.id_pago}, Pedido={pedido_id} -> 5, "
+                    f"Items actualizados={items_actualizados}, Reserva completada={reserva_completada}"
+                )
                 
                 return {
                     'success': True,
-                    'data': pago.to_dict()
+                    'data': pago.to_dict(),
+                    'transiciones': {
+                        'pedido': 5,
+                        'items_actualizados': items_actualizados,
+                        'reserva_completada': reserva_completada
+                    }
                 }
         
         except Exception as e:
@@ -123,75 +177,6 @@ class PagoService:
             return {
                 'success': False,
                 'error': f'Error al obtener pago: {str(e)}'
-            }
-    
-    
-    @staticmethod
-    def marcar_pagado(pago_id, metodo_pago, referencia=None, usuario_id=None):
-        """
-        Marcar pago como completado.
-        Transiciona pedido a estatus PAGADO (5).
-        
-        Args:
-            pago_id (int): ID del pago
-            metodo_pago (str): Método de pago (Efectivo, Tarjeta, QR, etc.)
-            referencia (str): Número de transacción (opcional)
-            usuario_id (int): ID del usuario que confirma
-        
-        Returns:
-            dict: {success: bool, data: {pago_dict}, error: str}
-        """
-        try:
-            with get_db_session() as session:
-                # Obtener pago
-                pago = session.query(Pago).filter(Pago.id_pago == pago_id).first()
-                
-                if not pago:
-                    logger.warning(f"Pago {pago_id} no existe")
-                    return {
-                        'success': False,
-                        'error': f'Pago {pago_id} no existe'
-                    }
-                
-                # Obtener pedido asociado
-                pedido = session.query(Pedido).filter(
-                    Pedido.id_pedido == pago.pedido_id
-                ).first()
-                
-                if not pedido:
-                    logger.error(f"Pedido {pago.pedido_id} del pago {pago_id} no existe")
-                    return {
-                        'success': False,
-                        'error': 'Pedido asociado no existe'
-                    }
-                
-                # Actualizar pago
-                pago.estatus = 2  # 2 = Pagado
-                pago.metodo_pago = metodo_pago
-                pago.referencia = referencia
-                pago.fecha_pago = datetime.utcnow()
-                
-                # Transicionar pedido a PAGADO (estatus 5)
-                pedido.estado_pedido = 5  # 5 = Pagado
-                
-                session.commit()
-                
-                logger.info(
-                    f"Pago {pago_id} marcado como pagado. "
-                    f"Pedido {pedido.id_pedido} transicionó a PAGADO. "
-                    f"Método: {metodo_pago}"
-                )
-                
-                return {
-                    'success': True,
-                    'data': pago.to_dict()
-                }
-        
-        except Exception as e:
-            logger.error(f"Error en marcar_pagado: {str(e)}", exc_info=True)
-            return {
-                'success': False,
-                'error': f'Error al marcar pago: {str(e)}'
             }
     
     
@@ -285,4 +270,116 @@ class PagoService:
             return {
                 'success': False,
                 'error': f'Error al cancelar pago: {str(e)}'
+            }
+    
+    
+    @staticmethod
+    def listar_pedidos_pendientes_pago(sucursal_id):
+        """
+        Listar pedidos en estado Completo (3) que están pendientes de pago.
+        Incluye items con subtotales y total del pedido.
+        
+        Args:
+            sucursal_id (int): ID de la sucursal
+        
+        Returns:
+            dict: {success: bool, data: [{pedido con items y total}], error: str}
+        """
+        try:
+            from src.models.catalogos.producto_model import Producto
+            from src.models.catalogos.combo_model import Combo
+            
+            with get_db_session() as session:
+                # Pedidos en estado 3 (Completo) - listos para pagar
+                pedidos = session.query(Pedido).filter(
+                    Pedido.sucursal_id == sucursal_id,
+                    Pedido.estado_pedido == 3  # 3 = Completo
+                ).order_by(Pedido.created_at.desc()).all()
+                
+                resultado = []
+                for pedido in pedidos:
+                    # Verificar si ya tiene pago registrado
+                    pago_existente = session.query(Pago).filter(
+                        Pago.pedido_id == pedido.id_pedido,
+                        Pago.estatus.in_([1, 2])  # Pendiente o Pagado
+                    ).first()
+                    
+                    # Obtener items del pedido con info de producto/combo
+                    items_pedido = session.query(PedidoItem).filter(
+                        PedidoItem.pedido_id == pedido.id_pedido,
+                        PedidoItem.estatus_detalle.notin_([4])  # Excluir cancelados
+                    ).all()
+                    
+                    items_detalle = []
+                    total_pedido = 0
+                    
+                    for item in items_pedido:
+                        # Calcular subtotal del item
+                        precio_unit = float(item.precio_unit) if item.precio_unit else 0
+                        subtotal = precio_unit * item.cantidad
+                        total_pedido += subtotal
+                        
+                        # Obtener nombre del producto o combo
+                        nombre_item = None
+                        tipo_item = None
+                        
+                        if item.producto_id:
+                            producto = session.query(Producto).filter(
+                                Producto.id_producto == item.producto_id
+                            ).first()
+                            nombre_item = producto.nombre if producto else f"Producto #{item.producto_id}"
+                            tipo_item = "producto"
+                        elif item.combo_id:
+                            combo = session.query(Combo).filter(
+                                Combo.id_combo == item.combo_id
+                            ).first()
+                            nombre_item = combo.nombre if combo else f"Combo #{item.combo_id}"
+                            tipo_item = "combo"
+                        
+                        items_detalle.append({
+                            'id_pedido_item': item.id_pedido_item,
+                            'tipo': tipo_item,
+                            'producto_id': item.producto_id,
+                            'combo_id': item.combo_id,
+                            'nombre': nombre_item,
+                            'cantidad': item.cantidad,
+                            'precio_unit': precio_unit,
+                            'subtotal': subtotal,
+                            'notas': item.notas,
+                            'estatus': item.estatus_detalle
+                        })
+                    
+                    # Construir diccionario del pedido
+                    pedido_dict = {
+                        'id_pedido': pedido.id_pedido,
+                        'folio': pedido.folio,
+                        'sucursal_id': pedido.sucursal_id,
+                        'cliente_id': pedido.cliente_id,
+                        'mesa_id': pedido.mesa_id,
+                        'tipo_pedido': pedido.tipo_pedido,
+                        'tipo_pedido_display': 'Dine-in' if pedido.tipo_pedido == 1 else 'Takeaway',
+                        'estado_pedido': pedido.estado_pedido,
+                        'notas': pedido.notas,
+                        'created_at': pedido.created_at.isoformat() if pedido.created_at else None,
+                        'items': items_detalle,
+                        'total': round(total_pedido, 2),
+                        'tiene_pago': pago_existente is not None,
+                        'pago_id': pago_existente.id_pago if pago_existente else None,
+                        'pago_estatus': pago_existente.estatus if pago_existente else None
+                    }
+                    
+                    resultado.append(pedido_dict)
+                
+                logger.info(f"Listados {len(resultado)} pedidos pendientes de pago con detalle")
+                
+                return {
+                    'success': True,
+                    'data': resultado
+                }
+        
+        except Exception as e:
+            logger.error(f"Error en listar_pedidos_pendientes_pago: {str(e)}", exc_info=True)
+            return {
+                'success': False,
+                'error': f'Error al listar pedidos: {str(e)}'
             }

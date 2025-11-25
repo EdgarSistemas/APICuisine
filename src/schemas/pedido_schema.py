@@ -1,6 +1,20 @@
 """
 Schemas para Pedido y PedidoItem - Validación con Marshmallow
-Estados Pedido: 1=Creado, 2=Confirmado, 3=EnPreparacion, 4=Listo, 5=Entregado, 6=Cancelado
+
+Estados Pedido (estado_pedido):
+  1 = Abierto (creado, puede agregar items)
+  2 = EnProceso (hay items en cocina)
+  3 = Completo (todos los items listos)
+  4 = Cancelado
+  5 = Pagado
+
+Estados PedidoItem (estatus_detalle):
+  0 = Iniciado (recién agregado)
+  1 = EnCocina (enviado a preparar)
+  2 = Listo (preparado)
+  3 = Completo (entregado)
+  4 = Cancelado
+  5 = Pagado
 """
 
 from marshmallow import Schema, fields, validates, ValidationError, validates_schema, pre_load
@@ -20,6 +34,8 @@ class PedidoItemSchema(Schema):
     combo_id = fields.Int(allow_none=True)
     cantidad = fields.Int()
     precio_unit = fields.Decimal(as_string=True)
+    estatus_detalle = fields.Int()
+    estatus_display = fields.Str(dump_only=True)
     notas = fields.Str(allow_none=True)
     created_at = FormattedDateTime()
     updated_at = FormattedDateTime(allow_none=True)
@@ -56,13 +72,16 @@ class PedidoCreateItemSchema(Schema):
 # ============================
 
 class PedidoCreateSchema(Schema):
-    """Schema para crear pedido (Dine-in o Takeaway)"""
+    """
+    Schema para crear pedido (Dine-in o Takeaway)
+    
+    NOTA: mesa_id NO se envía para Dine-in - se obtiene de la reserva automáticamente
+    """
     sucursal_id = fields.Int(required=True)
     cliente_id = fields.Int(required=True)
     tipo_pedido = fields.Int(required=True)  # 1=Dine-in, 2=Takeaway
     canal = fields.Int(required=True)  # 1=PWA, 2=Móvil, 3=Presencial
-    reserva_id = fields.Int(required=True)
-    mesa_id = fields.Int(allow_none=True)
+    reserva_id = fields.Int(required=True)  # Requerido para Dine-in
     notas = fields.Str(allow_none=True)
     items = fields.List(fields.Nested(PedidoCreateItemSchema), required=True)
     
@@ -83,17 +102,6 @@ class PedidoCreateSchema(Schema):
         if len(value) > 50:
             raise ValidationError("No puedes agregar más de 50 items a la vez")
     
-    @validates_schema
-    def validate_mesa_por_tipo(self, data, **kwargs):
-        tipo_pedido = data.get('tipo_pedido')
-        mesa_id = data.get('mesa_id')
-        
-        if tipo_pedido == 1 and not mesa_id:
-            raise ValidationError("mesa_id es requerido para pedidos Dine-in (tipo_pedido=1)")
-        
-        if tipo_pedido == 2 and mesa_id:
-            raise ValidationError("mesa_id debe ser NULL para pedidos Takeaway (tipo_pedido=2)")
-    
     @pre_load
     def strip_whitespace(self, data, **kwargs):
         if isinstance(data, dict) and data.get('notas'):
@@ -108,9 +116,9 @@ class PedidoCambiarEstadoSchema(Schema):
     
     @validates('estado_pedido')
     def validate_estado(self, value):
-        # Puedes transicionar a cualquier estado excepto 1 (Creado, que es inicial)
-        if value not in [2, 3, 4, 5, 6]:
-            raise ValidationError("estado_pedido debe ser: 2=Confirmado, 3=EnPreparacion, 4=Listo, 5=Entregado, 6=Cancelado")
+        # Estados válidos: 2=EnProceso, 3=Completo, 4=Cancelado, 5=Pagado
+        if value not in [2, 3, 4, 5]:
+            raise ValidationError("estado_pedido debe ser: 2=EnProceso, 3=Completo, 4=Cancelado, 5=Pagado")
 
 
 class PedidoResponseSchema(Schema):
@@ -137,14 +145,14 @@ class PedidoResponseSchema(Schema):
     def get_estado_display(self, obj):
         """Retorna nombre legible del estado"""
         estado_map = {
-            1: "Creado",
-            2: "Confirmado",
-            3: "En Preparación",
-            4: "Listo",
-            5: "Entregado",
-            6: "Cancelado"
+            1: "Abierto",
+            2: "EnProceso",
+            3: "Completo",
+            4: "Cancelado",
+            5: "Pagado"
         }
-        return estado_map.get(obj.get('estado_pedido'), "Desconocido")
+        estado = obj.get('estado_pedido') if isinstance(obj, dict) else getattr(obj, 'estado_pedido', None)
+        return estado_map.get(estado, "Desconocido")
     
     def get_tipo_display(self, obj):
         """Retorna nombre legible del tipo"""
@@ -152,7 +160,8 @@ class PedidoResponseSchema(Schema):
             1: "Dine-in",
             2: "Takeaway"
         }
-        return tipo_map.get(obj.get('tipo_pedido'), "Desconocido")
+        tipo = obj.get('tipo_pedido') if isinstance(obj, dict) else getattr(obj, 'tipo_pedido', None)
+        return tipo_map.get(tipo, "Desconocido")
 
 
 class PedidoListSchema(Schema):
