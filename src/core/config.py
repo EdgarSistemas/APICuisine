@@ -67,7 +67,7 @@ class Config:
 class DevelopmentConfig(Config):
     """Configuración para desarrollo"""
     DEBUG = True
-    SQLALCHEMY_ECHO = True
+    # SQLALCHEMY_ECHO = True  # Descomenta para ver queries SQL en desarrollo
 
 class ProductionConfig(Config):
     """Configuración para producción"""

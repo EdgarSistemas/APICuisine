@@ -42,6 +42,7 @@ from src.controller.JobsController import jobs_bp
 from src.controller.PushNotificationController import bp as push_notifications_bp
 from src.controller.CampaniaController import bp as campanias_bp
 from src.controller.CocinaController import bp as cocina_bp
+from src.services.firebase_service import FirebaseService
  
 def create_app():
   app = Flask(__name__)
@@ -68,6 +69,13 @@ def create_app():
   
   # Inicializar Swagger con Flasgger
   init_swagger(app)
+  
+  # Inicializar Firebase (notificaciones push)
+  firebase_ok = FirebaseService.initialize()
+  if firebase_ok:
+      print("🔥 Firebase Cloud Messaging inicializado correctamente")
+  else:
+      print("⚠️  Firebase no se pudo inicializar - Las notificaciones push no funcionarán")
 
   # Registrar blueprints
   app.register_blueprint(auth_bp)
