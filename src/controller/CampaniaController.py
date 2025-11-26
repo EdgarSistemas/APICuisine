@@ -91,17 +91,12 @@ def crear_campania():
     """
     try:
         current_user = get_jwt_identity()
-        usuario_id = current_user.get('id_usuario')
-        
-        # Solo admins pueden crear campañas
-        if not es_admin(usuario_id):
-            return jsonify({"error": "Solo administradores pueden crear campañas"}), 403
         
         schema = CampaniaCreateSchema()
         data = schema.load(request.json)
         
         result = CampaniaService.crear_campania(
-            usuario_id=usuario_id,
+            usuario_id=current_user,
             nombre_campania=data['nombre_campania'],
             porcentaje_desc=data['porcentaje_desc'],
             codigo=data.get('codigo')
@@ -227,10 +222,6 @@ def activar_campania(campania_id):
     """
     try:
         current_user = get_jwt_identity()
-        usuario_id = current_user.get('id_usuario')
-        
-        if not es_admin(usuario_id):
-            return jsonify({"error": "Solo administradores pueden activar campañas"}), 403
         
         result = CampaniaService.activar_campania(campania_id)
         
@@ -271,10 +262,6 @@ def desactivar_campania(campania_id):
     """
     try:
         current_user = get_jwt_identity()
-        usuario_id = current_user.get('id_usuario')
-        
-        if not es_admin(usuario_id):
-            return jsonify({"error": "Solo administradores pueden desactivar campañas"}), 403
         
         result = CampaniaService.desactivar_campania(campania_id)
         
@@ -335,10 +322,6 @@ def asignar_cupon():
     """
     try:
         current_user = get_jwt_identity()
-        usuario_id = current_user.get('id_usuario')
-        
-        if not es_admin(usuario_id):
-            return jsonify({"error": "Solo administradores pueden asignar cupones"}), 403
         
         schema = AsignarCuponSchema()
         data = schema.load(request.json)
@@ -392,10 +375,9 @@ def listar_cupones_usuario(cliente_id):
     """
     try:
         current_user = get_jwt_identity()
-        usuario_id = current_user.get('id_usuario')
         
         # El cliente puede ver sus propios cupones, admins pueden ver de cualquiera
-        if usuario_id != cliente_id and not es_admin(usuario_id):
+        if current_user != cliente_id and not es_admin(current_user):
             return jsonify({"error": "No tienes acceso a los cupones de este cliente"}), 403
         
         solo_disponibles = request.args.get('solo_disponibles', 'true').lower() == 'true'
@@ -439,12 +421,11 @@ def mis_cupones():
     """
     try:
         current_user = get_jwt_identity()
-        cliente_id = current_user.get('id_usuario')
         
         solo_disponibles = request.args.get('solo_disponibles', 'true').lower() == 'true'
         
         result = CampaniaService.listar_cupones_cliente(
-            cliente_id=cliente_id,
+            cliente_id=current_user,
             solo_disponibles=solo_disponibles
         )
         
@@ -576,10 +557,6 @@ def metrica_clientes_vip():
     """
     try:
         current_user = get_jwt_identity()
-        usuario_id = current_user.get('id_usuario')
-        
-        if not es_admin(usuario_id):
-            return jsonify({"error": "Solo administradores pueden ver métricas CRM"}), 403
         
         payload = request.get_json() or {}
         top_n = payload.get('top_n', 20)
@@ -631,10 +608,6 @@ def metrica_clientes_frecuentes():
     """
     try:
         current_user = get_jwt_identity()
-        usuario_id = current_user.get('id_usuario')
-        
-        if not es_admin(usuario_id):
-            return jsonify({"error": "Solo administradores pueden ver métricas CRM"}), 403
         
         payload = request.get_json() or {}
         top_n = payload.get('top_n', 20)
@@ -691,10 +664,6 @@ def metrica_clientes_inactivos():
     """
     try:
         current_user = get_jwt_identity()
-        usuario_id = current_user.get('id_usuario')
-        
-        if not es_admin(usuario_id):
-            return jsonify({"error": "Solo administradores pueden ver métricas CRM"}), 403
         
         payload = request.get_json() or {}
         dias_sin_comprar = payload.get('dias_sin_comprar', 30)
@@ -751,10 +720,6 @@ def metrica_clientes_nuevos():
     """
     try:
         current_user = get_jwt_identity()
-        usuario_id = current_user.get('id_usuario')
-        
-        if not es_admin(usuario_id):
-            return jsonify({"error": "Solo administradores pueden ver métricas CRM"}), 403
         
         payload = request.get_json() or {}
         dias_registro = payload.get('dias_registro', 30)
@@ -803,10 +768,6 @@ def metrica_clientes_por_canal():
     """
     try:
         current_user = get_jwt_identity()
-        usuario_id = current_user.get('id_usuario')
-        
-        if not es_admin(usuario_id):
-            return jsonify({"error": "Solo administradores pueden ver métricas CRM"}), 403
         
         result = CampaniaService.obtener_clientes_por_canal()
         
@@ -897,10 +858,6 @@ def generar_campania_desde_metrica():
     """
     try:
         current_user = get_jwt_identity()
-        usuario_id = current_user.get('id_usuario')
-        
-        if not es_admin(usuario_id):
-            return jsonify({"error": "Solo administradores pueden generar campañas"}), 403
         
         payload = request.get_json() or {}
         
@@ -932,7 +889,7 @@ def generar_campania_desde_metrica():
                 return jsonify({"error": "Formato de fecha_vigencia inválido (usar ISO 8601)"}), 400
         
         result = CampaniaService.generar_campania_desde_metrica(
-            usuario_id=usuario_id,
+            usuario_id=current_user,
             nombre_campania=nombre_campania,
             porcentaje_desc=porcentaje_desc,
             codigo=codigo,

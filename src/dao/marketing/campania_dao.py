@@ -512,29 +512,25 @@ class CampaniaDAO:
                     Reserva.cliente_id.isnot(None)
                 ).group_by(Reserva.cliente_id).subquery()
                 
-                # Query principal
+                # Query principal - usar INNER JOIN con pedidos para garantizar que tienen pedidos
                 resultados = session.query(
                     Usuario.id_usuario,
                     Usuario.nombre,
                     Usuario.apellido,
                     Usuario.email,
                     Usuario.telefono,
-                    func.coalesce(pedidos_count.c.total_pedidos, 0).label('total_pedidos'),
+                    pedidos_count.c.total_pedidos,
                     func.coalesce(reservas_count.c.total_reservas, 0).label('total_reservas'),
                     pedidos_count.c.primera_visita,
                     pedidos_count.c.ultima_visita
-                ).outerjoin(
+                ).join(
                     pedidos_count, Usuario.id_usuario == pedidos_count.c.cliente_id
                 ).outerjoin(
                     reservas_count, Usuario.id_usuario == reservas_count.c.cliente_id
                 ).filter(
                     Usuario.es_activo == True
-                ).having(
-                    (func.coalesce(pedidos_count.c.total_pedidos, 0) + 
-                     func.coalesce(reservas_count.c.total_reservas, 0)) > 0
                 ).order_by(
-                    desc(func.coalesce(pedidos_count.c.total_pedidos, 0) + 
-                         func.coalesce(reservas_count.c.total_reservas, 0))
+                    desc(pedidos_count.c.total_pedidos + func.coalesce(reservas_count.c.total_reservas, 0))
                 ).limit(top_n).all()
                 
                 clientes = []
@@ -771,28 +767,26 @@ class CampaniaDAO:
                     Reserva.cliente_id.isnot(None)
                 ).group_by(Reserva.cliente_id).subquery()
                 
-                # Query principal
+                # Query principal - usar INNER JOIN para garantizar que tienen pedidos
                 resultados = session.query(
                     Usuario.id_usuario,
                     Usuario.nombre,
                     Usuario.apellido,
                     Usuario.email,
                     Usuario.telefono,
-                    func.coalesce(tipo_pedido_count.c.pedidos_mesa, 0).label('pedidos_mesa'),
-                    func.coalesce(tipo_pedido_count.c.pedidos_takeaway, 0).label('pedidos_takeaway'),
-                    func.coalesce(tipo_pedido_count.c.pedidos_delivery, 0).label('pedidos_delivery'),
-                    func.coalesce(tipo_pedido_count.c.total_pedidos, 0).label('total_pedidos'),
+                    tipo_pedido_count.c.pedidos_mesa,
+                    tipo_pedido_count.c.pedidos_takeaway,
+                    tipo_pedido_count.c.pedidos_delivery,
+                    tipo_pedido_count.c.total_pedidos,
                     func.coalesce(reservas_count.c.total_reservas, 0).label('total_reservas')
-                ).outerjoin(
+                ).join(
                     tipo_pedido_count, Usuario.id_usuario == tipo_pedido_count.c.cliente_id
                 ).outerjoin(
                     reservas_count, Usuario.id_usuario == reservas_count.c.cliente_id
                 ).filter(
                     Usuario.es_activo == True
-                ).having(
-                    func.coalesce(tipo_pedido_count.c.total_pedidos, 0) > 0
                 ).order_by(
-                    desc('total_pedidos')
+                    desc(tipo_pedido_count.c.total_pedidos)
                 ).all()
                 
                 clientes = []
