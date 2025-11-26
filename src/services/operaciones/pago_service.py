@@ -4,15 +4,18 @@ PagoService - Lógica de negocio para Pagos
 Responsabilidades:
 - Crear pago: automáticamente marca pedido e items como PAGADO (5)
 - Marcar reserva como completada (3) si existe
+- Aplicar cupón de descuento si se proporciona campania_usuario_id
 
 Flujo simplificado:
   POST /api/pagos -> Pago creado en estatus 2 (Pagado)
                   -> Pedido transiciona a 5 (Pagado)
                   -> Items transicionan a 5 (Pagado)
                   -> Reserva (si existe) a 3 (Completada)
+                  -> Cupón (si existe) marcado como usado
 
 Columnas disponibles en pagos.Pago:
-  id_pago, pedido_id, sucursal_id, monto, propina, moneda, estatus, usuario_id, created_at, updated_at
+  id_pago, pedido_id, sucursal_id, monto, propina, moneda, estatus, usuario_id,
+  monto_descontado, campania_usuario_id, created_at, updated_at
 """
 
 import logging
@@ -23,6 +26,7 @@ from src.core.db.session_manager import get_db_session
 from src.models import Pago, Pedido
 from src.models.operaciones.pedido_item_model import PedidoItem
 from src.models.operaciones.reserva_model import Reserva
+from src.models.marketing.campania_usuario_model import CampaniaUsuario
 
 logger = logging.getLogger(__name__)
 
@@ -34,19 +38,31 @@ class PagoService:
     """
     
     @staticmethod
-    def crear_pago(pedido_id, sucursal_id, monto, propina=0, moneda='MXN', usuario_id=None):
+    def crear_pago(
+        pedido_id, 
+        sucursal_id, 
+        monto, 
+        propina=0, 
+        moneda='MXN', 
+        usuario_id=None,
+        campania_usuario_id=None,
+        monto_descontado=None
+    ):
         """
         Crear registro de pago para un pedido.
         Automáticamente transiciona pedido e items a estado PAGADO (5).
         Marca reserva como completada (3) si existe.
+        Invalida el cupón si se proporciona campania_usuario_id.
         
         Args:
             pedido_id (int): ID del pedido a pagar
             sucursal_id (int): ID de la sucursal
-            monto (float): Monto total del pedido
+            monto (float): Monto total del pedido (antes de descuento)
             propina (float): Propina (opcional)
             moneda (str): Moneda (MXN, USD, etc.)
             usuario_id (int): ID del cajero que registra el pago
+            campania_usuario_id (int): ID del cupón del cliente (opcional)
+            monto_descontado (float): Monto del descuento aplicado (opcional)
         
         Returns:
             dict: {success: bool, data: {pago_dict}, error: str}
@@ -81,6 +97,25 @@ class PagoService:
                         'error': 'El monto debe ser mayor a 0'
                     }
                 
+                # Validar cupón si viene
+                cupon_usado = False
+                if campania_usuario_id:
+                    campania_usuario = session.query(CampaniaUsuario).filter(
+                        CampaniaUsuario.id_campania_usuario == campania_usuario_id
+                    ).first()
+                    
+                    if not campania_usuario:
+                        return {
+                            'success': False,
+                            'error': f'Cupón {campania_usuario_id} no existe'
+                        }
+                    
+                    if campania_usuario.estatus != 0:
+                        return {
+                            'success': False,
+                            'error': 'El cupón ya fue utilizado'
+                        }
+                
                 # 1. Crear pago en estado PAGADO (2)
                 pago = Pago(
                     pedido_id=pedido_id,
@@ -89,16 +124,29 @@ class PagoService:
                     propina=Decimal(str(propina)),
                     moneda=moneda,
                     estatus=2,  # 2 = Pagado (directo)
-                    usuario_id=usuario_id
+                    usuario_id=usuario_id,
+                    campania_usuario_id=campania_usuario_id,
+                    monto_descontado=Decimal(str(monto_descontado)) if monto_descontado else None
                 )
                 session.add(pago)
                 session.flush()
                 
-                # 2. Transicionar pedido a PAGADO (5)
+                # 2. Marcar cupón como usado si viene
+                if campania_usuario_id:
+                    campania_usuario = session.query(CampaniaUsuario).filter(
+                        CampaniaUsuario.id_campania_usuario == campania_usuario_id
+                    ).first()
+                    
+                    if campania_usuario:
+                        campania_usuario.estatus = 1  # 1 = Usado
+                        cupon_usado = True
+                        logger.info(f"Cupón {campania_usuario_id} marcado como usado")
+                
+                # 3. Transicionar pedido a PAGADO (5)
                 pedido.estado_pedido = 5
                 pedido.updated_at = datetime.utcnow()
                 
-                # 3. Transicionar todos los items del pedido a PAGADO (5)
+                # 4. Transicionar todos los items del pedido a PAGADO (5)
                 items_actualizados = session.query(PedidoItem).filter(
                     PedidoItem.pedido_id == pedido.id_pedido,
                     PedidoItem.estatus_detalle.in_([2, 3])  # Solo items Listo o Completo
@@ -107,7 +155,7 @@ class PagoService:
                     synchronize_session='fetch'
                 )
                 
-                # 4. Marcar reserva como completada si existe
+                # 5. Marcar reserva como completada si existe
                 reserva_completada = False
                 if pedido.reserva_id:
                     reserva = session.query(Reserva).filter(
@@ -124,7 +172,8 @@ class PagoService:
                 
                 logger.info(
                     f"Pago creado y completado: ID={pago.id_pago}, Pedido={pedido_id} -> 5, "
-                    f"Items actualizados={items_actualizados}, Reserva completada={reserva_completada}"
+                    f"Items actualizados={items_actualizados}, Reserva completada={reserva_completada}, "
+                    f"Cupón usado={cupon_usado}"
                 )
                 
                 return {
@@ -133,7 +182,8 @@ class PagoService:
                     'transiciones': {
                         'pedido': 5,
                         'items_actualizados': items_actualizados,
-                        'reserva_completada': reserva_completada
+                        'reserva_completada': reserva_completada,
+                        'cupon_usado': cupon_usado
                     }
                 }
         

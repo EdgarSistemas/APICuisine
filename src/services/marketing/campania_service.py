@@ -135,6 +135,33 @@ class CampaniaService:
     
     
     @staticmethod
+    def listar_campanias_activas() -> dict:
+        """
+        Listar solo campañas activas con contadores de cupones.
+        
+        Returns:
+            dict: {success: bool, data: {campanias, total}, error: str}
+        """
+        try:
+            campanias = CampaniaDAO.listar_campanias_activas()
+            
+            return {
+                'success': True,
+                'data': {
+                    'campanias': campanias,
+                    'total': len(campanias)
+                }
+            }
+            
+        except Exception as e:
+            logger.error(f"Error listando campañas activas: {str(e)}")
+            return {
+                'success': False,
+                'error': str(e)
+            }
+    
+    
+    @staticmethod
     def activar_campania(campania_id: int) -> dict:
         """Activar campaña (estatus = 1)"""
         try:

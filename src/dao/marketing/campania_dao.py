@@ -142,6 +142,51 @@ class CampaniaDAO:
     
     
     @staticmethod
+    def listar_campanias_activas() -> list:
+        """
+        Listar solo campañas activas con contadores de cupones.
+        
+        Returns:
+            Lista de campañas activas con total_cupones y total_cupones_usados
+        """
+        with get_db_session() as session:
+            try:
+                # Subquery para contar cupones totales y usados por campaña
+                cupones_stats = session.query(
+                    CampaniaUsuario.campania_id,
+                    func.count(CampaniaUsuario.id_campania_usuario).label('total_cupones'),
+                    func.sum(case((CampaniaUsuario.estatus == 1, 1), else_=0)).label('total_cupones_usados')
+                ).group_by(CampaniaUsuario.campania_id).subquery()
+                
+                # Query principal: campañas activas con stats
+                resultados = session.query(
+                    Campania,
+                    func.coalesce(cupones_stats.c.total_cupones, 0).label('total_cupones'),
+                    func.coalesce(cupones_stats.c.total_cupones_usados, 0).label('total_cupones_usados')
+                ).outerjoin(
+                    cupones_stats, Campania.id_campania == cupones_stats.c.campania_id
+                ).filter(
+                    Campania.estatus == 1  # Solo activas
+                ).order_by(
+                    Campania.created_at.desc()
+                ).all()
+                
+                campanias = []
+                for campania, total_cupones, total_cupones_usados in resultados:
+                    campania_dict = campania.to_dict()
+                    campania_dict['total_cupones'] = total_cupones or 0
+                    campania_dict['total_cupones_usados'] = total_cupones_usados or 0
+                    campanias.append(campania_dict)
+                
+                logger.info(f"Listando {len(campanias)} campañas activas")
+                return campanias
+                
+            except Exception as e:
+                logger.error(f"Error listando campañas activas: {str(e)}")
+                raise
+    
+    
+    @staticmethod
     def cambiar_estatus_campania(campania_id: int, nuevo_estatus: int) -> dict:
         """Activar/Desactivar campaña"""
         with get_db_session() as session:

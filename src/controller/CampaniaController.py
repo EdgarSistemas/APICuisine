@@ -121,39 +121,22 @@ def crear_campania():
 @jwt_required()
 def listar_campanias():
     """
-    Listar campañas de marketing.
+    Listar campañas activas de marketing.
     ---
     tags:
       - CRM - Campañas
-    summary: Listar campañas
-    description: Lista todas las campañas con filtros opcionales.
-    parameters:
-      - in: query
-        name: estatus
-        type: integer
-        description: "Filtrar por estatus (0=Inactiva, 1=Activa)"
-      - in: query
-        name: limit
-        type: integer
-        default: 50
-      - in: query
-        name: offset
-        type: integer
-        default: 0
+    summary: Listar campañas activas
+    description: |
+      Lista todas las campañas activas.
+      Cada campaña incluye:
+      - total_cupones: Cantidad de cupones asignados
+      - total_cupones_usados: Cantidad de cupones ya utilizados
     responses:
       200:
-        description: Lista de campañas
+        description: Lista de campañas activas
     """
     try:
-        estatus = request.args.get('estatus', type=int)
-        limit = request.args.get('limit', 50, type=int)
-        offset = request.args.get('offset', 0, type=int)
-        
-        result = CampaniaService.listar_campanias(
-            estatus=estatus,
-            limit=limit,
-            offset=offset
-        )
+        result = CampaniaService.listar_campanias_activas()
         
         if not result['success']:
             return jsonify({"error": result['error']}), 400

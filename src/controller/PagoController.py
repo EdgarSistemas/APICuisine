@@ -55,6 +55,7 @@ def crear_pago():
       - Pedido: 3 (Completo) → 5 (Pagado)
       - Items: → 5 (Pagado)
       - Reserva: 2 (EnCurso) → 3 (Completada) si existe
+      - Cupón: 0 (No usado) → 1 (Usado) si se proporciona
     parameters:
       - in: body
         name: body
@@ -72,12 +73,19 @@ def crear_pago():
               type: integer
             monto:
               type: number
+              description: "Monto original del pedido"
             propina:
               type: number
               default: 0
             moneda:
               type: string
               default: "MXN"
+            campania_usuario_id:
+              type: integer
+              description: "ID del cupón asignado al cliente (opcional)"
+            monto_descontado:
+              type: number
+              description: "Monto del descuento aplicado (opcional)"
     responses:
       201:
         description: Pago creado y pedido marcado como pagado
@@ -104,7 +112,9 @@ def crear_pago():
             monto=data['monto'],
             propina=data.get('propina', 0),
             moneda=data.get('moneda', 'MXN'),
-            usuario_id=current_user
+            usuario_id=current_user,
+            campania_usuario_id=data.get('campania_usuario_id'),
+            monto_descontado=data.get('monto_descontado')
         )
         
         if not result['success']:
