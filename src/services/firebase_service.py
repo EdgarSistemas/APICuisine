@@ -34,7 +34,7 @@ class FirebaseService:
     """
     
     _initialized = False
-    _keyvault_secret_name = "config-firebase"
+    _keyvault_secret_name = "config-firebase-2"
     
     @classmethod
     def initialize(cls) -> bool:
