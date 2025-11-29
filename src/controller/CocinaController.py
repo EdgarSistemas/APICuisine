@@ -272,7 +272,7 @@ def marcar_item_listo(item_id):
                 }), 400
         
         # Marcar como listo usando Service (maneja auto-pay de takeaway)
-        try:
+        try: 
             item_actualizado = PedidoService.marcar_item_listo(item_id, usuario_id)
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
