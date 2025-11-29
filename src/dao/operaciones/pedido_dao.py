@@ -365,7 +365,7 @@ class PedidoDAO:
     
     @staticmethod
     def listar_pedidos_por_sucursal(sucursal_id: int, fecha_desde=None, fecha_hasta=None, 
-                                     estado=None, tipo_pedido=None, offset=0, limit=50):
+                                     estado=None, tipo_pedido=None, cliente_id=None, offset=0, limit=50):
         """
         Lista pedidos de una sucursal con filtros opcionales
         
@@ -375,6 +375,7 @@ class PedidoDAO:
             fecha_hasta: Fecha máxima (opcional)
             estado: Estado del pedido (opcional): 0=Iniciado, 3=Completo, 4=Cancelado, 5=Pagado
             tipo_pedido: Tipo de pedido (opcional): 1=Dine-in, 2=Takeaway
+            cliente_id: ID del cliente (opcional)
             offset: Paginación offset
             limit: Paginación limit
         
@@ -393,6 +394,8 @@ class PedidoDAO:
                     query = query.filter(Pedido.estado_pedido == estado)
                 if tipo_pedido is not None:
                     query = query.filter(Pedido.tipo_pedido == tipo_pedido)
+                if cliente_id is not None:
+                    query = query.filter(Pedido.cliente_id == cliente_id)
                 
                 total = query.count()
                 

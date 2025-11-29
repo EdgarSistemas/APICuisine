@@ -958,3 +958,239 @@ class CampaniaDAO:
             except Exception as e:
                 logger.error(f"Error en asignación masiva: {str(e)}")
                 raise
+    
+    
+    # =========================================================================
+    # VERIFICACIÓN DE CAMPAÑAS VENCIDAS (Para Push Notifications)
+    # =========================================================================
+    
+    @staticmethod
+    def obtener_cupones_vencidos_no_marcados() -> list:
+        """
+        Obtener cupones vencidos que aún tienen estatus 0 (NoUsado).
+        
+        Criterios:
+            - CampaniaUsuario.estatus = 0 (no usado)
+            - CampaniaUsuario.fecha_vigencia < NOW() (ya venció)
+        
+        Returns:
+            Lista de cupones vencidos con info de campaña y cliente
+        """
+        with get_db_session() as session:
+            try:
+                ahora_mx = datetime.now(MEXICO_TZ)
+                
+                # Query: cupones no usados con fecha_vigencia pasada
+                resultados = session.query(
+                    CampaniaUsuario,
+                    Campania,
+                    Usuario
+                ).join(
+                    Campania, CampaniaUsuario.campania_id == Campania.id_campania
+                ).join(
+                    Usuario, CampaniaUsuario.cliente_id == Usuario.id_usuario
+                ).filter(
+                    CampaniaUsuario.estatus == 0,  # No usado
+                    CampaniaUsuario.fecha_vigencia.isnot(None),  # Tiene fecha de vigencia
+                    CampaniaUsuario.fecha_vigencia < ahora_mx  # Ya venció
+                ).all()
+                
+                cupones_vencidos = []
+                for asignacion, campania, usuario in resultados:
+                    cupones_vencidos.append({
+                        'id_campania_usuario': asignacion.id_campania_usuario,
+                        'cliente_id': asignacion.cliente_id,
+                        'cliente_nombre': f"{usuario.nombre} {usuario.apellido}".strip(),
+                        'cliente_email': usuario.email,
+                        'campania_id': campania.id_campania,
+                        'campania_nombre': campania.nombre_campania,
+                        'campania_codigo': campania.codigo,
+                        'fecha_vigencia': asignacion.fecha_vigencia.isoformat() if asignacion.fecha_vigencia else None,
+                        'dias_vencido': (ahora_mx - asignacion.fecha_vigencia.replace(tzinfo=MEXICO_TZ)).days if asignacion.fecha_vigencia else 0
+                    })
+                
+                logger.info(f"Encontrados {len(cupones_vencidos)} cupones vencidos no marcados")
+                return cupones_vencidos
+                
+            except Exception as e:
+                logger.error(f"Error obteniendo cupones vencidos: {str(e)}")
+                raise
+    
+    
+    @staticmethod
+    def marcar_cupones_vencidos() -> dict:
+        """
+        Marcar cupones vencidos con estatus 2 (Vencido).
+        
+        Actualiza:
+            - CampaniaUsuario.estatus = 2 donde fecha_vigencia < NOW() y estatus = 0
+        
+        Returns:
+            Dict con resumen de actualización
+        """
+        with get_db_session() as session:
+            try:
+                ahora_mx = datetime.now(MEXICO_TZ)
+                
+                # Obtener cupones a marcar (para logging)
+                cupones_vencidos = session.query(CampaniaUsuario).filter(
+                    CampaniaUsuario.estatus == 0,
+                    CampaniaUsuario.fecha_vigencia.isnot(None),
+                    CampaniaUsuario.fecha_vigencia < ahora_mx
+                ).all()
+                
+                total_vencidos = len(cupones_vencidos)
+                
+                if total_vencidos == 0:
+                    logger.info("No hay cupones vencidos para marcar")
+                    return {
+                        'cupones_actualizados': 0,
+                        'campanias_afectadas': []
+                    }
+                
+                # Obtener campañas afectadas antes de actualizar
+                campanias_ids = list(set([c.campania_id for c in cupones_vencidos]))
+                
+                # Actualizar estatus a 2 (Vencido)
+                for cupon in cupones_vencidos:
+                    cupon.estatus = 2
+                
+                session.commit()
+                
+                logger.info(f"Marcados {total_vencidos} cupones como vencidos (estatus=2)")
+                
+                return {
+                    'cupones_actualizados': total_vencidos,
+                    'campanias_afectadas': campanias_ids
+                }
+                
+            except Exception as e:
+                logger.error(f"Error marcando cupones vencidos: {str(e)}")
+                raise
+    
+    
+    @staticmethod
+    def verificar_campanias_sin_cupones_activos() -> list:
+        """
+        Verificar campañas activas que ya no tienen cupones disponibles.
+        
+        Una campaña debería desactivarse si:
+            - Todos sus cupones están usados (estatus=1) o vencidos (estatus=2)
+            - No quedan cupones con estatus=0 y fecha_vigencia >= NOW()
+        
+        Returns:
+            Lista de campañas que deberían desactivarse
+        """
+        with get_db_session() as session:
+            try:
+                ahora_mx = datetime.now(MEXICO_TZ)
+                
+                # Subquery: contar cupones disponibles por campaña
+                # Disponible = estatus=0 AND (fecha_vigencia IS NULL OR fecha_vigencia >= NOW)
+                cupones_disponibles = session.query(
+                    CampaniaUsuario.campania_id,
+                    func.count(CampaniaUsuario.id_campania_usuario).label('total_disponibles')
+                ).filter(
+                    CampaniaUsuario.estatus == 0,
+                    ((CampaniaUsuario.fecha_vigencia.is_(None)) | 
+                     (CampaniaUsuario.fecha_vigencia >= ahora_mx))
+                ).group_by(CampaniaUsuario.campania_id).subquery()
+                
+                # Campañas activas sin cupones disponibles
+                campanias_para_desactivar = session.query(
+                    Campania
+                ).outerjoin(
+                    cupones_disponibles, Campania.id_campania == cupones_disponibles.c.campania_id
+                ).filter(
+                    Campania.estatus == 1,  # Activa
+                    ((cupones_disponibles.c.total_disponibles.is_(None)) | 
+                     (cupones_disponibles.c.total_disponibles == 0))
+                ).all()
+                
+                resultado = []
+                for campania in campanias_para_desactivar:
+                    # Contar cupones totales, usados y vencidos
+                    stats = session.query(
+                        func.count(CampaniaUsuario.id_campania_usuario).label('total'),
+                        func.sum(case((CampaniaUsuario.estatus == 1, 1), else_=0)).label('usados'),
+                        func.sum(case((CampaniaUsuario.estatus == 2, 1), else_=0)).label('vencidos')
+                    ).filter(
+                        CampaniaUsuario.campania_id == campania.id_campania
+                    ).first()
+                    
+                    resultado.append({
+                        'campania_id': campania.id_campania,
+                        'nombre_campania': campania.nombre_campania,
+                        'codigo': campania.codigo,
+                        'total_cupones': stats.total or 0,
+                        'cupones_usados': stats.usados or 0,
+                        'cupones_vencidos': stats.vencidos or 0
+                    })
+                
+                logger.info(f"Encontradas {len(resultado)} campañas sin cupones activos")
+                return resultado
+                
+            except Exception as e:
+                logger.error(f"Error verificando campañas sin cupones: {str(e)}")
+                raise
+    
+    
+    @staticmethod
+    def desactivar_campanias_sin_cupones() -> dict:
+        """
+        Desactivar campañas que ya no tienen cupones disponibles.
+        
+        Returns:
+            Dict con resumen de desactivación
+        """
+        with get_db_session() as session:
+            try:
+                ahora_mx = datetime.now(MEXICO_TZ)
+                
+                # Subquery: contar cupones disponibles por campaña
+                cupones_disponibles = session.query(
+                    CampaniaUsuario.campania_id,
+                    func.count(CampaniaUsuario.id_campania_usuario).label('total_disponibles')
+                ).filter(
+                    CampaniaUsuario.estatus == 0,
+                    ((CampaniaUsuario.fecha_vigencia.is_(None)) | 
+                     (CampaniaUsuario.fecha_vigencia >= ahora_mx))
+                ).group_by(CampaniaUsuario.campania_id).subquery()
+                
+                # Campañas activas sin cupones disponibles
+                campanias = session.query(Campania).outerjoin(
+                    cupones_disponibles, Campania.id_campania == cupones_disponibles.c.campania_id
+                ).filter(
+                    Campania.estatus == 1,
+                    ((cupones_disponibles.c.total_disponibles.is_(None)) | 
+                     (cupones_disponibles.c.total_disponibles == 0))
+                ).all()
+                
+                if not campanias:
+                    logger.info("No hay campañas para desactivar")
+                    return {
+                        'campanias_desactivadas': 0,
+                        'detalle': []
+                    }
+                
+                desactivadas = []
+                for campania in campanias:
+                    campania.estatus = 0  # Desactivar
+                    desactivadas.append({
+                        'campania_id': campania.id_campania,
+                        'nombre_campania': campania.nombre_campania,
+                        'codigo': campania.codigo
+                    })
+                
+                session.commit()
+                
+                logger.info(f"Desactivadas {len(desactivadas)} campañas sin cupones activos")
+                
+                return {
+                    'campanias_desactivadas': len(desactivadas),
+                    'detalle': desactivadas
+                }
+                
+            except Exception as e:
+                logger.error(f"Error desactivando campañas: {str(e)}")
+                raise
