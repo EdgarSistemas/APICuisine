@@ -42,6 +42,7 @@ from src.controller.JobsController import jobs_bp
 from src.controller.PushNotificationController import bp as push_notifications_bp
 from src.controller.CampaniaController import bp as campanias_bp
 from src.controller.CocinaController import bp as cocina_bp
+from src.controller.DashboardController import bp as dashboard_bp
 from src.services.firebase_service import FirebaseService
  
 def create_app():
@@ -113,6 +114,7 @@ def create_app():
   app.register_blueprint(push_notifications_bp)
   app.register_blueprint(campanias_bp)
   app.register_blueprint(cocina_bp)
+  app.register_blueprint(dashboard_bp)
 
   @app.route('/health')
   def health_check():
