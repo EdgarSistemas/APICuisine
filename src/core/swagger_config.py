@@ -45,11 +45,11 @@ def init_swagger(app: Flask):
                 "type": "apiKey",
                 "name": "Authorization",
                 "in": "header",
-                "description": "JWT Authorization header using the Bearer scheme. Example: 'Authorization: Bearer {token}'"
+                "description": "Ingresa tu token JWT con el prefijo Bearer. Ejemplo: Bearer eyJhbGciOiJIUzI1NiIs..."
             }
         },
         
-        # Seguridad global (opcional - se puede aplicar por endpoint)
+        # Seguridad global (aplica a todos los endpoints por defecto)
         "security": [
             {"Bearer": []}
         ],
