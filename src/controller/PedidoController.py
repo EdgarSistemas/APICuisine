@@ -527,6 +527,9 @@ def listar_pedidos():
             tipo_pedido:
               type: integer
               description: "1=Dine-in, 2=Takeaway (opcional)"
+            cliente_id:
+              type: integer
+              description: "ID del cliente para filtrar pedidos (opcional)"
     responses:
       200:
         description: Lista de pedidos
@@ -542,6 +545,7 @@ def listar_pedidos():
         fecha_desde = payload.get('fecha_desde')
         fecha_hasta = payload.get('fecha_hasta')
         tipo_pedido = payload.get('tipo_pedido')
+        cliente_id = payload.get('cliente_id')
         
         # Si no se especifica sucursal, usar las del usuario
         if sucursal_id:
@@ -567,7 +571,8 @@ def listar_pedidos():
             estado=estado,
             fecha_desde=fecha_desde,
             fecha_hasta=fecha_hasta,
-            tipo_pedido=tipo_pedido
+            tipo_pedido=tipo_pedido,
+            cliente_id=cliente_id
         )
         
         return jsonify({
@@ -578,7 +583,8 @@ def listar_pedidos():
                 "estado": estado,
                 "fecha_desde": fecha_desde.isoformat() if fecha_desde else None,
                 "fecha_hasta": fecha_hasta.isoformat() if fecha_hasta else None,
-                "tipo_pedido": tipo_pedido
+                "tipo_pedido": tipo_pedido,
+                "cliente_id": cliente_id
             }
         }), 200
     
