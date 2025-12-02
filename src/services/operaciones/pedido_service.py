@@ -38,6 +38,7 @@ from src.dao.inventario.inventario_dao import InventarioDAO
 from src.models.operaciones.pedido_model import Pedido, PedidoItem
 from src.models.operaciones.reserva_model import Reserva
 from src.models.operaciones.hold_mesa_model import HoldMesa
+from src.services.notification import NotificationService
 import logging
 
 logger = logging.getLogger(__name__)
@@ -144,6 +145,18 @@ class PedidoService:
                 logger.warning(f"Pedido {pedido_id} creado con {len(errores_consumo)} errores de consumo de inventario")
             
             logger.info(f"Pedido Dine-in creado: {pedido_id}, reserva={reserva_id}, mesa={mesa_id}, items={len(items_creados)}")
+            
+            # Notificar a cocina
+            try:
+                mesa_num = str(mesa_id)  # TODO: obtener numero_mesa real
+                NotificationService.notificar_pedido_creado(
+                    pedido_id=pedido_id,
+                    mesa_num=mesa_num,
+                    cant_items=len(items_creados),
+                    sucursal_id=sucursal_id
+                )
+            except Exception as notif_error:
+                logger.warning(f"Error enviando notificación de pedido creado: {notif_error}")
             
             return pedido_completo
         
@@ -288,6 +301,23 @@ class PedidoService:
             
             logger.info(f"Item {item_id} marcado como listo (1→2)")
             
+            # Notificar al mesero que el item está listo
+            try:
+                pedido_info = PedidoDAO.obtener_pedido_completo(item['pedido_id'])
+                if pedido_info:
+                    mesero_id = pedido_info.get('inicia_usuario_id')
+                    mesa_id = pedido_info.get('mesa_id')
+                    producto_nombre = item.get('producto_nombre', 'Producto')
+                    if mesero_id:
+                        NotificationService.notificar_item_listo(
+                            pedido_id=item['pedido_id'],
+                            producto=producto_nombre,
+                            mesa_num=str(mesa_id) if mesa_id else 'N/A',
+                            mesero_id=mesero_id
+                        )
+            except Exception as notif_error:
+                logger.warning(f"Error enviando notificación item listo: {notif_error}")
+            
             # Verificar si es Takeaway y todos los items están listos para auto-pay
             pedido_id = item['pedido_id']
             pedido_data = PedidoDAO.obtener_pedido_completo(pedido_id)
@@ -421,6 +451,22 @@ class PedidoService:
             )
             
             logger.info(f"Item {item_id} cancelado (1→4)")
+            
+            # Notificar a cocina sobre item cancelado
+            try:
+                pedido_info = PedidoDAO.obtener_pedido_completo(item['pedido_id'])
+                if pedido_info:
+                    producto_nombre = item.get('producto_nombre', 'Producto')
+                    mesa_id = pedido_info.get('mesa_id')
+                    NotificationService.notificar_item_cancelado(
+                        pedido_id=item['pedido_id'],
+                        producto=producto_nombre,
+                        mesa_num=str(mesa_id) if mesa_id else 'N/A',
+                        sucursal_id=pedido_info.get('sucursal_id')
+                    )
+            except Exception as notif_error:
+                logger.warning(f"Error enviando notificación item cancelado: {notif_error}")
+            
             return item_actualizado
         
         except Exception as e:
@@ -562,6 +608,19 @@ class PedidoService:
                 resultado = PedidoDAO.obtener_pedido_completo(pedido_id)
                 logger.info(f"Pedido {pedido_id} completado (estado 0→3)")
                 
+                # Notificar a caja que el pedido está listo para cobrar
+                try:
+                    mesa_id = resultado.get('mesa_id')
+                    total = resultado.get('total', 0)
+                    NotificationService.notificar_pedido_completo(
+                        pedido_id=pedido_id,
+                        mesa_num=str(mesa_id) if mesa_id else 'N/A',
+                        total=float(total),
+                        sucursal_id=resultado.get('sucursal_id')
+                    )
+                except Exception as notif_error:
+                    logger.warning(f"Error enviando notificación pedido completo: {notif_error}")
+                
                 return resultado
             
             except Exception as e:
@@ -620,6 +679,17 @@ class PedidoService:
                 
                 resultado = PedidoDAO.obtener_pedido_completo(pedido_id)
                 logger.info(f"Pedido {pedido_id} cancelado (estado {estado_actual}→4)")
+                
+                # Notificar a cocina y mesero sobre pedido cancelado
+                try:
+                    mesa_id = resultado.get('mesa_id')
+                    NotificationService.notificar_pedido_cancelado(
+                        pedido_id=pedido_id,
+                        mesa_num=str(mesa_id) if mesa_id else 'N/A',
+                        sucursal_id=resultado.get('sucursal_id')
+                    )
+                except Exception as notif_error:
+                    logger.warning(f"Error enviando notificación pedido cancelado: {notif_error}")
                 
                 return resultado
             

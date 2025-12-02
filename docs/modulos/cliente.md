@@ -15,7 +15,7 @@ Documentación de endpoints para la **app móvil del cliente**. Este módulo per
 3. [Reservas](#3-reservas)
 4. [Pedidos](#4-pedidos)
 5. [CRM - Cupones](#5-crm---cupones)
-6. [Calificaciones](#6-calificaciones)
+6. [Calificaciones y Mejoras](#6-calificaciones-y-mejoras)
 
 ---
 
@@ -140,10 +140,10 @@ GET /api/mesas?sucursal_id={sucursal_id}
 
 | Estado | Valor | Descripción |
 |--------|-------|-------------|
-| Disponible | 1 | Mesa libre para reservar |
-| Ocupada | 2 | Mesa en uso |
-| En Limpieza | 3 | Mesa siendo preparada |
-| Fuera de Servicio | 4 | Mesa no disponible |
+| Disponible | `1` | Mesa libre para reservar |
+| Ocupada | `2` | Mesa en uso |
+| En Limpieza | `3` | Mesa siendo preparada |
+| Fuera de Servicio | `4` | Mesa no disponible |
 
 ---
 
@@ -284,11 +284,78 @@ GET /api/combos/{combo_id}
 
 ## 3. Reservas
 
-El cliente **elige la sucursal y mesa**, luego crea su reserva usando el sistema de Hold.
+El cliente **elige la sucursal, luego el área, y finalmente la mesa**, después crea su reserva usando el sistema de Hold.
 
-### 3.1 Sistema de Hold
+### 3.1 Flujo Completo de Reserva
 
-Antes de crear una reserva, se debe **bloquear la mesa** por 3 minutos.
+```
+┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
+│ 1. ELEGIR   │ ──▶│ 2. ELEGIR   │ ──▶│ 3. ELEGIR   │ ──▶│ 4. VERIFICAR│ ──▶│ 5. CREAR    │ ──▶│ 6. CREAR    │
+│   SUCURSAL  │    │    ÁREA     │    │    MESA     │    │   DISPONIB. │    │    HOLD     │    │   RESERVA   │
+└─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘
+     │                   │                  │                  │                  │                  │
+     ▼                   ▼                  ▼                  ▼                  ▼                  ▼
+GET /sucursales    GET /areas?        GET /mesas?       POST /holds/      POST /holds       POST /reservas
+   /activas        sucursal_id=X    sucursal_id=X&    disponibilidad
+                                      area_id=Y
+```
+
+### 3.2 Paso a Paso del Flujo
+
+#### Paso 1: Elegir Sucursal
+```
+GET /api/sucursales/activas
+```
+El cliente ve la lista de sucursales disponibles y selecciona una.
+
+#### Paso 2: Elegir Área
+```
+GET /api/areas?sucursal_id={sucursal_id}
+```
+Con la sucursal seleccionada, el cliente ve las áreas disponibles (Salón, Terraza, VIP, etc.).
+
+#### Paso 3: Elegir Mesa
+```
+GET /api/mesas?sucursal_id={sucursal_id}&area_id={area_id}
+```
+Con el área seleccionada, el cliente ve las mesas disponibles con su capacidad y estado actual.
+
+#### Paso 4: Verificar Disponibilidad de Mesa
+
+```
+POST /api/holds/disponibilidad
+```
+
+**Body:**
+```json
+{
+  "mesa_id": 5,
+  "inicio": "2025-12-15T19:00:00",
+  "fin_estimado": "2025-12-15T21:00:00"
+}
+```
+
+**Respuesta (200) - Disponible:**
+```json
+{
+  "disponible": true,
+  "mensaje": "Mesa disponible en el horario solicitado"
+}
+```
+
+**Respuesta (200) - No Disponible:**
+```json
+{
+  "disponible": false,
+  "mensaje": "Mesa no disponible. Ya existe un hold o reserva activa en ese horario."
+}
+```
+
+---
+
+### 3.3 Sistema de Hold (Paso 5)
+
+Antes de crear una reserva, se debe **bloquear la mesa temporalmente** (3 minutos por defecto).
 
 #### Crear Hold en Mesa
 
@@ -300,35 +367,109 @@ POST /api/holds
 ```json
 {
   "mesa_id": 5,
-  "inicio": "2025-06-15 19:00:00",
-  "fin": "2025-06-15 21:00:00"
+  "actor_tipo": 1,
+  "inicio": "2025-12-15 19:00:00",
+  "horas": 2,
+  "ttl_minutes": 3,
+  "notas": "Mesa cerca de ventana"
 }
 ```
+
+| Campo | Tipo | Requerido | Descripción |
+|-------|------|-----------|-------------|
+| `mesa_id` | int | ✅ | ID de la mesa a reservar |
+| `actor_tipo` | int | ✅ | `1` = Cliente, `2` = Recepcionista |
+| `inicio` | string | ✅ | Fecha/hora inicio `yyyy-mm-dd hh:mm:ss` |
+| `horas` | int | ✅ | Duración estimada en horas |
+| `ttl_minutes` | int | ❌ | Minutos antes de expirar (default: 3, max: 30) |
+| `notas` | string | ❌ | Notas adicionales |
 
 **Respuesta (201):**
 ```json
 {
-  "mensaje": "Hold creado exitosamente",
+  "message": "Hold creado exitosamente",
   "hold": {
-    "id_hold": 123,
+    "id_hold_mesa": 123,
     "mesa_id": 5,
-    "expira_at": "2025-06-15T18:03:00",
-    "ttl_segundos": 180
+    "actor_tipo": 1,
+    "actor_usuario_id": 45,
+    "estatus": 1,
+    "inicio": "2025-12-15T19:00:00",
+    "fin_estimado": "2025-12-15T21:00:00",
+    "expires_at": "2025-12-15T15:03:00",
+    "horas": 2
   }
 }
 ```
 
 > ⏱️ **TTL de 3 minutos**: Si no se crea la reserva, el hold expira automáticamente.
 
-#### Cancelar Hold
+#### Estados del Hold
+
+| Estado | Valor | Descripción |
+|--------|-------|-------------|
+| Activo | `1` | Hold vigente, esperando confirmación |
+| Confirmado | `2` | Hold convertido a reserva |
+| Expirado | `3` | TTL cumplido sin confirmar |
+| Cancelado | `4` | Cancelado por usuario |
+
+---
+
+#### Confirmar Hold
 
 ```
-DELETE /api/holds/{hold_id}
+POST /api/holds/{hold_id}/confirmar
+```
+
+> ⚠️ **Importante**: Confirmar el hold antes de crear la reserva.
+
+**Validaciones:**
+- Hold existe
+- Hold está activo (estatus=1)
+- Hold no ha expirado
+
+**Respuesta (200):**
+```json
+{
+  "message": "Hold confirmado. Ahora puedes crear la reserva.",
+  "hold": {
+    "id_hold_mesa": 123,
+    "estatus": 2,
+    "mesa_id": 5
+  },
+  "tiempo_restante_min": 2.5
+}
 ```
 
 ---
 
-### 3.2 Crear Reserva
+#### Cancelar Hold
+
+```
+POST /api/holds/{hold_id}/cancelar
+```
+
+**Body (opcional):**
+```json
+{
+  "motivo": "Cambio de planes"
+}
+```
+
+**Respuesta (200):**
+```json
+{
+  "message": "Hold cancelado",
+  "hold": {
+    "id_hold_mesa": 123,
+    "estatus": 4
+  }
+}
+```
+
+---
+
+### 3.4 Crear Reserva (Paso 6)
 
 ```
 POST /api/reservas
@@ -338,50 +479,86 @@ POST /api/reservas
 ```json
 {
   "cliente_id": 45,
-  "hold_id": 123,
-  "inicio": "2025-06-15 19:00:00",
-  "fin_estimado": "2025-06-15 21:00:00",
+  "recepcionista_id": null,
+  "inicio": "2025-12-15 19:00:00",
+  "fin_estimado": "2025-12-15 21:00:00",
   "tolerancia_min": 15,
-  "notas": "Cumpleaños, mesa cerca de ventana"
+  "notas": "Cumpleaños, mesa cerca de ventana",
+  "hold_id": 123
 }
 ```
 
 | Campo | Tipo | Requerido | Descripción |
 |-------|------|-----------|-------------|
-| `cliente_id` | int | ✅ | ID del cliente (del JWT) |
-| `hold_id` | int | ✅ | ID del hold activo |
-| `inicio` | string | ✅ | Fecha/hora `yyyy-mm-dd hh:mm:ss` |
+| `cliente_id` | int | ❌ | ID del cliente (se obtiene del JWT) |
+| `recepcionista_id` | int | ❌ | NULL si es desde app cliente |
+| `inicio` | string | ✅ | Fecha/hora inicio `yyyy-mm-dd hh:mm:ss` |
 | `fin_estimado` | string | ✅ | Fecha/hora fin estimada |
-| `tolerancia_min` | int | ❌ | Minutos de tolerancia (default: 15) |
-| `notas` | string | ❌ | Notas adicionales |
+| `tolerancia_min` | int | ❌ | Minutos de tolerancia (default: 15, max: 120) |
+| `notas` | string | ❌ | Notas adicionales (max: 300 chars) |
+| `hold_id` | int | ⭐ | ID del hold confirmado (recomendado) |
 
 **Respuesta (201):**
 ```json
 {
-  "mensaje": "Reserva creada exitosamente",
-  "reserva": {
+  "success": true,
+  "data": {
     "id_reserva": 789,
-    "mesa_id": 5,
     "cliente_id": 45,
-    "inicio": "2025-06-15T19:00:00",
-    "fin_estimado": "2025-06-15T21:00:00",
-    "estado": 0,
-    "tolerancia_min": 15
+    "inicio": "2025-12-15T19:00:00",
+    "fin_estimado": "2025-12-15T21:00:00",
+    "estatus": 1,
+    "tolerancia_min": 15,
+    "notas": "Cumpleaños, mesa cerca de ventana",
+    "hold_id": 123,
+    "created_at": "2025-12-10T14:30:00"
   }
 }
 ```
 
 ---
 
-### 3.3 Consultar Reserva
+### 3.5 Estados de Reserva
+
+| Estado | Valor | Descripción |
+|--------|-------|-------------|
+| Programada | `1` | Reserva confirmada, esperando cliente |
+| En Curso | `2` | Cliente llegó, ocupando mesa |
+| Completada | `3` | Cliente terminó y se fue |
+| No Show | `4` | Cliente no llegó en tiempo de tolerancia |
+| Cancelada | `5` | Cancelada por cliente o sistema |
+
+---
+
+### 3.6 Consultar Reserva
 
 ```
 GET /api/reservas/{reserva_id}
 ```
 
+**Respuesta (200):**
+```json
+{
+  "success": true,
+  "data": {
+    "id_reserva": 789,
+    "cliente_id": 45,
+    "inicio": "2025-12-15T19:00:00",
+    "fin_estimado": "2025-12-15T21:00:00",
+    "estatus": 1,
+    "estatus_display": "Programada",
+    "tolerancia_min": 15,
+    "notas": "Cumpleaños",
+    "hold_id": 123,
+    "puede_iniciar": false,
+    "created_at": "2025-12-10T14:30:00"
+  }
+}
+```
+
 ---
 
-### 3.4 Listar Mis Reservas
+### 3.7 Listar Mis Reservas
 
 ```
 POST /api/reservas/listar
@@ -391,15 +568,44 @@ POST /api/reservas/listar
 ```json
 {
   "cliente_id": 45,
-  "estado": 0,
-  "fecha_desde": "2025-06-01",
-  "fecha_hasta": "2025-06-30"
+  "estatus": 1,
+  "fecha_desde": "2025-12-01T00:00:00",
+  "fecha_hasta": "2025-12-31T23:59:59"
+}
+```
+
+| Campo | Tipo | Requerido | Descripción |
+|-------|------|-----------|-------------|
+| `cliente_id` | int | ❌ | Filtrar por cliente |
+| `sucursal_id` | int | ❌ | Filtrar por sucursal |
+| `estatus` | int | ❌ | Filtrar por estado |
+| `fecha_desde` | string | ❌ | Desde fecha (ISO format) |
+| `fecha_hasta` | string | ❌ | Hasta fecha (ISO format) |
+
+**Respuesta (200):**
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id_reserva": 789,
+      "inicio": "2025-12-15T19:00:00",
+      "estatus": 1,
+      "estatus_display": "Programada"
+    },
+    {
+      "id_reserva": 790,
+      "inicio": "2025-12-20T20:00:00",
+      "estatus": 1,
+      "estatus_display": "Programada"
+    }
+  ]
 }
 ```
 
 ---
 
-### 3.5 Cancelar Reserva
+### 3.8 Cancelar Reserva
 
 ```
 POST /api/reservas/{reserva_id}/cancelar
@@ -412,17 +618,20 @@ POST /api/reservas/{reserva_id}/cancelar
 }
 ```
 
----
+**Validaciones:**
+- Solo se pueden cancelar reservas en estatus `1` (Programada) o `2` (En Curso)
 
-### 3.6 Estados de Reserva
-
-| Estado | Valor | Descripción |
-|--------|-------|-------------|
-| Confirmada | 0 | Reserva activa, esperando cliente |
-| Iniciada | 1 | Cliente llegó, mesa ocupada |
-| Completada | 2 | Servicio finalizado |
-| Cancelada | 3 | Cancelada por cliente o sistema |
-| No-Show | 4 | Cliente no llegó |
+**Respuesta (200):**
+```json
+{
+  "success": true,
+  "data": {
+    "id_reserva": 789,
+    "estatus": 5,
+    "estatus_display": "Cancelada"
+  }
+}
+```
 
 ---
 
@@ -430,110 +639,175 @@ POST /api/reservas/{reserva_id}/cancelar
 
 El cliente puede hacer **su propio pedido** tanto en sitio como para llevar.
 
-### 4.1 Crear Pedido Dine-in (En sitio)
+### 4.1 Estados del Sistema
+
+#### Estados de Pedido (`estado_pedido`)
+
+| Estado | Valor | Descripción |
+|--------|-------|-------------|
+| Iniciado | `0` | Pedido recién creado, agregando items |
+| Completo | `3` | Usuario cerró el pedido |
+| Cancelado | `4` | Pedido cancelado |
+| Pagado | `5` | Pedido pagado |
+
+#### Estados de Item (`estatus_detalle`)
+
+| Estado | Valor | Descripción |
+|--------|-------|-------------|
+| En Cocina | `1` | Item creado, inventario consumido |
+| Listo | `2` | Preparado por cocina |
+| Completo | `3` | Entregado al cliente |
+| Cancelado | `4` | Item cancelado |
+| Pagado | `5` | Item pagado |
+
+---
+
+### 4.2 Flujo de Pedidos
+
+```
+DINE-IN (En sitio):
+┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐
+│ RESERVA  │ ──▶│ CREAR    │ ──▶│ AGREGAR  │ ──▶│ COMPLETAR│ ──▶│ PAGAR    │
+│ ACTIVA   │    │ PEDIDO   │    │ ITEMS    │    │ PEDIDO   │    │          │
+└──────────┘    └──────────┘    └──────────┘    └──────────┘    └──────────┘
+    (1-2)           (0)            (0)             (3)            (5)
+
+TAKEAWAY (Para llevar):
+┌──────────┐    ┌──────────┐    ┌──────────┐    ┌────────────────┐
+│ CREAR    │ ──▶│ AGREGAR  │ ──▶│ COCINA   │ ──▶│ AUTO-PAGO      │
+│ PEDIDO   │    │ ITEMS    │    │ PREPARA  │    │ (todos listos) │
+└──────────┘    └──────────┘    └──────────┘    └────────────────┘
+    (0)            (0)           (1→2)              (5)
+```
+
+---
+
+### 4.3 Crear Pedido Dine-in (En sitio)
 
 ```
 POST /api/pedidos
 ```
 
-Para consumo en el restaurante. **Requiere reserva activa**.
+> ⚠️ **REQUIERE** reserva activa (estatus 1 o 2)
 
 **Body:**
 ```json
 {
   "sucursal_id": 1,
   "cliente_id": 45,
+  "canal": 2,
   "reserva_id": 789,
+  "notas": "Sin picante",
   "items": [
     {
       "producto_id": 10,
       "cantidad": 2,
-      "notas": "Sin cebolla"
+      "notas": "Extra queso"
     },
     {
       "combo_id": 5,
       "cantidad": 1
     }
-  ],
-  "canal": "App",
-  "notas": "Mesa junto a ventana"
+  ]
 }
 ```
 
 | Campo | Tipo | Requerido | Descripción |
 |-------|------|-----------|-------------|
-| `sucursal_id` | int | ✅ | ID de sucursal |
+| `sucursal_id` | int | ✅ | ID de la sucursal |
 | `cliente_id` | int | ✅ | ID del cliente |
+| `canal` | int | ✅ | `1`=PWA, `2`=Móvil, `3`=Presencial |
 | `reserva_id` | int | ✅ | ID de reserva activa |
-| `items` | array | ✅ | Al menos 1 item |
-| `items[].producto_id` | int | XOR | Producto (excluyente con combo_id) |
-| `items[].combo_id` | int | XOR | Combo (excluyente con producto_id) |
-| `items[].cantidad` | int | ✅ | Cantidad |
-| `items[].notas` | string | ❌ | Notas del item |
+| `notas` | string | ❌ | Notas del pedido |
+| `items` | array | ❌ | Items iniciales (opcional) |
 
 **Respuesta (201):**
 ```json
 {
-  "mensaje": "Pedido creado - Items en cocina",
+  "mensaje": "Pedido creado - items en cocina, inventario consumido",
   "pedido": {
-    "id_pedido": 1234,
+    "id_pedido": 100,
+    "sucursal_id": 1,
+    "cliente_id": 45,
     "tipo_pedido": 1,
-    "estado": 0,
-    "items_creados": 3,
-    "total_estimado": 450.00
+    "canal": 2,
+    "estado_pedido": 0,
+    "reserva_id": 789,
+    "mesa_id": 5,
+    "total": 500.00,
+    "items": [
+      {
+        "id_pedido_item": 1,
+        "producto_id": 10,
+        "producto_nombre": "Hamburguesa Clásica",
+        "cantidad": 2,
+        "precio_unit": 150.00,
+        "subtotal": 300.00,
+        "estatus_detalle": 1,
+        "consumo_exitoso": true
+      }
+    ]
   }
 }
 ```
 
 ---
 
-### 4.2 Crear Pedido Para Llevar (Takeaway)
+### 4.4 Crear Pedido Takeaway (Para llevar)
 
 ```
 POST /api/pedidos/para-llevar
 ```
 
-Para comida para llevar. **No requiere reserva**.
+> ✅ **NO requiere reserva** - Crea una reserva interna automáticamente
 
 **Body:**
 ```json
 {
   "sucursal_id": 1,
   "cliente_id": 45,
+  "canal": 2,
+  "notas": "Empacar por separado",
   "items": [
+    {
+      "producto_id": 10,
+      "cantidad": 2
+    },
     {
       "producto_id": 15,
       "cantidad": 1
-    },
-    {
-      "combo_id": 3,
-      "cantidad": 2,
-      "notas": "Sin picante"
     }
-  ],
-  "canal": "App",
-  "notas": "Recoger en 30 min"
+  ]
 }
 ```
+
+| Campo | Tipo | Requerido | Descripción |
+|-------|------|-----------|-------------|
+| `sucursal_id` | int | ✅ | ID de la sucursal |
+| `cliente_id` | int | ✅ | ID del cliente (**obligatorio**) |
+| `canal` | int | ✅ | `1`=PWA, `2`=Móvil, `3`=Presencial |
+| `notas` | string | ❌ | Notas del pedido |
+| `items` | array | ❌ | Items iniciales |
 
 **Respuesta (201):**
 ```json
 {
-  "mensaje": "Pedido para llevar creado - En cocina",
+  "mensaje": "Pedido Takeaway creado - items en cocina, inventario consumido",
   "pedido": {
-    "id_pedido": 1235,
+    "id_pedido": 101,
     "tipo_pedido": 2,
-    "estado": 0,
-    "items_creados": 3
+    "estado_pedido": 0,
+    "mesa_id": null,
+    "items": [...]
   }
 }
 ```
 
-> 💰 **Auto-pago**: Cuando cocina marca todos los items como `Listo`, el pedido cambia automáticamente a `Pagado`.
+> 🎯 **Auto-pago Takeaway**: Cuando cocina marca **todos los items como Listo (2)**, el pedido se auto-paga a estado `5`.
 
 ---
 
-### 4.3 Agregar Item a Pedido
+### 4.5 Agregar Item al Pedido
 
 ```
 POST /api/pedidos/{pedido_id}/items
@@ -542,57 +816,86 @@ POST /api/pedidos/{pedido_id}/items
 **Body:**
 ```json
 {
-  "producto_id": 12,
+  "producto_id": 20,
   "cantidad": 1,
-  "notas": "Extra queso"
+  "notas": "Con hielo"
 }
 ```
 
----
+| Campo | Tipo | Requerido | Descripción |
+|-------|------|-----------|-------------|
+| `producto_id` | int | ⭐ | ID del producto (XOR con combo_id) |
+| `combo_id` | int | ⭐ | ID del combo (XOR con producto_id) |
+| `cantidad` | int | ✅ | Cantidad |
+| `notas` | string | ❌ | Notas del item |
 
-### 4.4 Consultar Pedido
+**Validaciones:**
+- Pedido debe estar en estado `0` (Iniciado) o `3` (Completo)
+- Debe proporcionar `producto_id` **O** `combo_id`, no ambos
+- Consume inventario inmediatamente (FIFO por lotes)
 
-```
-GET /api/pedidos/{pedido_id}
-```
-
-**Respuesta:**
+**Respuesta (201):**
 ```json
 {
-  "pedido": {
-    "id_pedido": 1234,
-    "tipo_pedido": 1,
-    "tipo_descripcion": "Dine-in",
-    "estado": 0,
-    "estado_descripcion": "Iniciado",
-    "items": [
-      {
-        "id_item": 567,
-        "producto": "Hamburguesa Clásica",
-        "cantidad": 2,
-        "estado": 1,
-        "estado_descripcion": "En Cocina"
-      }
-    ],
-    "total": 450.00
+  "message": "Item agregado exitosamente",
+  "item": {
+    "id_pedido_item": 5,
+    "producto_id": 20,
+    "producto_nombre": "Refresco",
+    "cantidad": 1,
+    "precio_unit": 35.00,
+    "subtotal": 35.00,
+    "estatus_detalle": 1,
+    "consumo_exitoso": true
   }
 }
 ```
 
 ---
 
-### 4.5 Completar Pedido
+### 4.6 Ver Estado del Pedido
 
 ```
-PATCH /api/pedidos/{pedido_id}/completar
+GET /api/pedidos/{pedido_id}
 ```
 
----
-
-### 4.6 Cancelar Pedido
-
-```
-PATCH /api/pedidos/{pedido_id}/cancelar
+**Respuesta (200):**
+```json
+{
+  "id_pedido": 100,
+  "sucursal_id": 1,
+  "cliente_id": 45,
+  "tipo_pedido": 1,
+  "tipo_pedido_display": "Dine-in",
+  "estado_pedido": 0,
+  "estado_display": "Iniciado",
+  "mesa_id": 5,
+  "reserva_id": 789,
+  "total": 535.00,
+  "notas": "Sin picante",
+  "items": [
+    {
+      "id_pedido_item": 1,
+      "producto_nombre": "Hamburguesa Clásica",
+      "cantidad": 2,
+      "precio_unit": 150.00,
+      "subtotal": 300.00,
+      "estatus_detalle": 2,
+      "estatus_display": "Listo",
+      "notas": "Extra queso"
+    },
+    {
+      "id_pedido_item": 2,
+      "combo_nombre": "Combo Familiar",
+      "cantidad": 1,
+      "precio_unit": 200.00,
+      "subtotal": 200.00,
+      "estatus_detalle": 1,
+      "estatus_display": "En Cocina"
+    }
+  ],
+  "created_at": "2025-12-15T19:15:00"
+}
 ```
 
 ---
@@ -606,41 +909,90 @@ POST /api/pedidos/listar
 **Body:**
 ```json
 {
-  "sucursal_id": 1,
   "cliente_id": 45,
+  "sucursal_id": 1,
   "estado": 0,
-  "tipo_pedido": 2
+  "tipo_pedido": 1,
+  "fecha_desde": "2025-12-01",
+  "fecha_hasta": "2025-12-31"
 }
 ```
 
 ---
 
-### 4.8 Estados de Pedido
+### 4.8 Ver Pedidos Activos
 
-| Estado | Valor | Descripción |
-|--------|-------|-------------|
-| Iniciado | 0 | Pedido creado, items en cocina |
-| Completo | 3 | Cliente cerró el pedido |
-| Cancelado | 4 | Pedido cancelado |
-| Pagado | 5 | Pago completado |
+```
+GET /api/pedidos/activos?sucursal_id=1
+```
 
-### 4.9 Estados de Item
+Retorna pedidos en estado `0` (Iniciado) y `3` (Completo).
 
-| Estado | Valor | Descripción |
-|--------|-------|-------------|
-| Pendiente | 0 | En cola |
-| En Cocina | 1 | Cocinándose |
-| Listo | 2 | Listo para servir |
-| Entregado | 3 | Entregado al cliente |
-| Cancelado | 4 | Item cancelado |
+---
+
+### 4.9 Completar Pedido
+
+```
+PATCH /api/pedidos/{pedido_id}/completar
+```
+
+> Cambia estado: `0` → `3`
+
+**Validaciones:**
+- Pedido debe estar en estado `0` (Iniciado)
+- **Todos los items** deben estar en estado `2` (Listo) o superior
+
+**Respuesta (200):**
+```json
+{
+  "mensaje": "Pedido completado",
+  "pedido": {
+    "id_pedido": 100,
+    "estado_pedido": 3,
+    "estado_display": "Completo"
+  }
+}
+```
+
+---
+
+### 4.10 Cancelar Pedido
+
+```
+PATCH /api/pedidos/{pedido_id}/cancelar
+```
+
+**Body (opcional):**
+```json
+{
+  "comentario": "Cliente cambió de opinión"
+}
+```
+
+**Validaciones:**
+- Solo se pueden cancelar pedidos en estado `0` (Iniciado)
+
+> ⚠️ **NOTA**: Si los items ya consumieron inventario, **NO se revierte** al cancelar.
+
+**Respuesta (200):**
+```json
+{
+  "mensaje": "Pedido cancelado",
+  "pedido": {
+    "id_pedido": 100,
+    "estado_pedido": 4,
+    "estado_display": "Cancelado"
+  }
+}
+```
 
 ---
 
 ## 5. CRM - Cupones
 
-El cliente puede ver y usar sus cupones disponibles.
+El cliente puede ver sus **cupones disponibles** y aplicarlos a sus pedidos.
 
-### 5.1 Mis Cupones
+### 5.1 Ver Mis Cupones
 
 ```
 GET /api/campanias/cupones/mis-cupones
@@ -649,35 +1001,50 @@ GET /api/campanias/cupones/mis-cupones
 **Query params:**
 | Parámetro | Tipo | Default | Descripción |
 |-----------|------|---------|-------------|
-| `solo_disponibles` | bool | true | Solo cupones no usados y vigentes |
+| `vigentes` | bool | `true` | Solo cupones no usados y vigentes |
 
-**Respuesta:**
+**Respuesta (200):**
 ```json
 {
   "cupones": [
     {
-      "id": 45,
+      "id_campania_usuario": 1,
+      "campania_id": 5,
+      "nombre_campania": "Promo Navidad",
       "codigo": "NAVIDAD2025",
-      "campania": "Promoción Navidad",
-      "porcentaje_desc": 15.00,
-      "fecha_expira": "2025-12-31",
-      "estatus": 0,
-      "estatus_descripcion": "Disponible"
+      "porcentaje_desc": 10.0,
+      "fecha_vigencia": "2025-12-31T23:59:59",
+      "usado": false
+    },
+    {
+      "id_campania_usuario": 2,
+      "campania_id": 8,
+      "nombre_campania": "Cliente Frecuente",
+      "codigo": "FRECUENTE15",
+      "porcentaje_desc": 15.0,
+      "fecha_vigencia": "2026-01-31T23:59:59",
+      "usado": false
     }
   ],
-  "total": 1
+  "total": 2
 }
 ```
 
 ---
 
-### 5.2 Validar Cupón
+### 5.2 Ver Cupones de un Cliente Específico
+
+```
+GET /api/campanias/cupones/cliente/{cliente_id}
+```
+
+---
+
+### 5.3 Validar Cupón
 
 ```
 POST /api/campanias/cupones/validar
 ```
-
-Valida si un cupón es aplicable antes de usarlo en el pago.
 
 **Body:**
 ```json
@@ -687,36 +1054,104 @@ Valida si un cupón es aplicable antes de usarlo en el pago.
 }
 ```
 
-**Respuesta:**
+**Validaciones realizadas:**
+1. ✅ Código de cupón existe
+2. ✅ Campaña está activa
+3. ✅ Cupón asignado al cliente
+4. ✅ Cupón no usado previamente
+5. ✅ Cupón dentro de fecha de vigencia (timezone México)
+
+**Respuesta (200) - Cupón válido:**
 ```json
 {
   "valido": true,
   "campania": {
-    "nombre": "Promoción Navidad",
-    "descripcion": "15% de descuento"
+    "id_campania": 5,
+    "nombre_campania": "Promo Navidad"
   },
-  "porcentaje_desc": 15.00,
-  "campania_usuario_id": 123
+  "porcentaje_desc": 10.0,
+  "campania_usuario_id": 1
+}
+```
+
+**Respuesta (200) - Cupón inválido:**
+```json
+{
+  "valido": false,
+  "error": "Cupón ya fue utilizado"
 }
 ```
 
 ---
 
-### 5.3 Estados de Cupón
+### 5.4 Ver Campañas Activas
 
-| Estado | Valor | Descripción |
-|--------|-------|-------------|
-| No Usado | 0 | Disponible para usar |
-| Usado | 1 | Ya fue aplicado |
-| Vencido | 2 | Expiró sin usarse |
+```
+GET /api/campanias
+```
+
+**Respuesta (200):**
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id_campania": 5,
+      "nombre": "Promo Navidad",
+      "descripcion": "10% de descuento en todo",
+      "porcentaje_desc": 10.0,
+      "fecha_inicio": "2025-12-01T00:00:00",
+      "fecha_fin": "2025-12-31T23:59:59",
+      "es_activa": true
+    }
+  ]
+}
+```
 
 ---
 
-## 6. Calificaciones
+### 5.5 Aplicar Cupón al Pago
 
-El cliente puede calificar el servicio **después de que el pedido esté pagado**.
+El cupón se aplica al momento de **crear el pago**:
 
-> ⚠️ **Requisito**: El pedido debe estar en estado `Pagado (5)` para poder calificar.
+```
+POST /api/pagos
+```
+
+**Body:**
+```json
+{
+  "pedido_id": 100,
+  "sucursal_id": 1,
+  "monto": 500.00,
+  "propina": 50.00,
+  "moneda": "MXN",
+  "campania_usuario_id": 1,
+  "monto_descontado": 50.00
+}
+```
+
+| Campo | Tipo | Requerido | Descripción |
+|-------|------|-----------|-------------|
+| `pedido_id` | int | ✅ | ID del pedido |
+| `sucursal_id` | int | ✅ | ID de la sucursal |
+| `monto` | float | ✅ | Monto antes de descuento |
+| `propina` | float | ❌ | Propina (default: 0) |
+| `moneda` | string | ❌ | Moneda (default: MXN) |
+| `campania_usuario_id` | int | ❌ | ID del cupón a aplicar |
+| `monto_descontado` | float | ❌ | Monto del descuento |
+
+**Flujo:**
+1. Validar cupón con `/api/campanias/cupones/validar`
+2. Obtener `campania_usuario_id` de la respuesta
+3. Enviar ese ID al crear el pago
+4. El sistema aplica el descuento y marca el cupón como usado
+
+---
+
+## 6. Calificaciones y Mejoras
+
+El cliente puede **calificar el servicio** y **enviar sugerencias** de mejora.
 
 ### 6.1 Crear Calificación
 
@@ -727,131 +1162,197 @@ POST /api/calificaciones
 **Body:**
 ```json
 {
-  "pedido_id": 1234,
-  "empleado_id": 78,
+  "pedido_id": 100,
+  "empleado_id": 5,
   "calificacion": 9,
-  "notas": "Excelente atención, muy amable"
+  "notas": "Excelente servicio, muy amable y atento"
 }
 ```
 
 | Campo | Tipo | Requerido | Descripción |
 |-------|------|-----------|-------------|
-| `pedido_id` | int | ✅ | ID del pedido (debe estar pagado) |
-| `empleado_id` | int | ✅ | ID del mesero/empleado |
-| `calificacion` | int | ✅ | Puntuación de **1 a 10** |
-| `notas` | string | ❌ | Comentarios |
+| `pedido_id` | int | ✅ | ID del pedido |
+| `empleado_id` | int | ❌ | ID del empleado calificado |
+| `calificacion` | int | ✅ | Puntuación del 1 al 10 |
+| `notas` | string | ❌ | Comentarios (max 300 chars) |
+
+**Validaciones:**
+- `calificacion`: Debe ser un entero entre 1 y 10
+- `notas`: Máximo 300 caracteres
+- No se puede calificar el mismo pedido dos veces
 
 **Respuesta (201):**
 ```json
 {
-  "mensaje": "Calificación registrada",
-  "calificacion": {
-    "id_calificacion": 456,
-    "pedido_id": 1234,
-    "empleado_id": 78,
+  "success": true,
+  "data": {
+    "id_calificacion": 1,
+    "pedido_id": 100,
+    "cliente_id": 45,
+    "empleado_id": 5,
     "calificacion": 9,
-    "notas": "Excelente atención"
+    "notas": "Excelente servicio, muy amable y atento",
+    "created_at": "2025-12-15T21:30:00"
   }
 }
 ```
 
 ---
 
-### 6.2 Listar Mis Calificaciones
+### 6.2 Ver Mis Calificaciones
 
 ```
-GET /api/calificaciones?pedido_id={id}
+GET /api/calificaciones
+```
+
+**Query params:**
+| Parámetro | Tipo | Descripción |
+|-----------|------|-------------|
+| `pedido_id` | int | Filtrar por pedido |
+| `empleado_id` | int | Filtrar por empleado |
+
+> **Nota**: Los clientes solo ven sus propias calificaciones.
+
+**Respuesta (200):**
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id_calificacion": 1,
+      "pedido_id": 100,
+      "empleado_id": 5,
+      "calificacion": 9,
+      "notas": "Excelente servicio",
+      "created_at": "2025-12-15T21:30:00"
+    }
+  ]
+}
 ```
 
 ---
 
-## 📊 Resumen de Endpoints
+### 6.3 Obtener Calificación por ID
+
+```
+GET /api/calificaciones/{calificacion_id}
+```
+
+---
+
+### 6.4 Enviar Sugerencia de Mejora
+
+```
+POST /api/mejoras
+```
+
+**Body:**
+```json
+{
+  "notas": "Sería bueno tener más opciones vegetarianas en el menú"
+}
+```
+
+| Campo | Tipo | Requerido | Descripción |
+|-------|------|-----------|-------------|
+| `notas` | string | ✅ | Sugerencia (1-300 caracteres) |
+
+**Respuesta (201):**
+```json
+{
+  "success": true,
+  "data": {
+    "id_mejora": 1,
+    "cliente_id": 45,
+    "notas": "Sería bueno tener más opciones vegetarianas en el menú",
+    "estatus": 1,
+    "created_at": "2025-12-15T21:35:00"
+  }
+}
+```
+
+---
+
+### 6.5 Ver Mis Sugerencias
+
+```
+GET /api/mejoras
+```
+
+**Query params:**
+| Parámetro | Tipo | Descripción |
+|-----------|------|-------------|
+| `estatus` | int | Filtrar por estado |
+
+**Estados de Mejora:**
+| Estado | Valor | Descripción |
+|--------|-------|-------------|
+| Registrada | `1` | Sugerencia recibida |
+| En Proceso | `2` | Siendo evaluada |
+| Implementada | `3` | Sugerencia aplicada |
+| Descartada | `4` | No se implementará |
+
+---
+
+### 6.6 Obtener Sugerencia por ID
+
+```
+GET /api/mejoras/{mejora_id}
+```
+
+---
+
+## 📱 Resumen de Endpoints para Cliente
 
 ### Catálogos
-| Método | Endpoint | Descripción |
-|--------|----------|-------------|
-| GET | `/api/sucursales/activas` | Listar sucursales (público) |
-| GET | `/api/sucursales/{id}` | Obtener sucursal |
-| GET | `/api/areas?sucursal_id={id}` | Listar áreas |
-| GET | `/api/mesas?sucursal_id={id}` | Listar mesas |
+| Método | Ruta | Descripción |
+|--------|------|-------------|
+| `GET` | `/api/sucursales/activas` | 🔓 Ver sucursales |
+| `GET` | `/api/areas?sucursal_id=X` | Ver áreas |
+| `GET` | `/api/mesas?sucursal_id=X` | Ver mesas |
 
 ### Menú
-| Método | Endpoint | Descripción |
-|--------|----------|-------------|
-| GET | `/api/categorias` | Listar categorías (público) |
-| GET | `/api/productos` | Listar productos (público) |
-| GET | `/api/productos/{id}` | Obtener producto |
-| GET | `/api/combos` | Listar combos (público) |
-| GET | `/api/combos/{id}` | Obtener combo |
+| Método | Ruta | Descripción |
+|--------|------|-------------|
+| `GET` | `/api/categorias` | 🔓 Ver categorías |
+| `GET` | `/api/productos` | 🔓 Ver productos |
+| `GET` | `/api/combos` | 🔓 Ver combos |
 
 ### Reservas
-| Método | Endpoint | Descripción |
-|--------|----------|-------------|
-| POST | `/api/holds` | Crear hold (3 min) |
-| DELETE | `/api/holds/{id}` | Cancelar hold |
-| POST | `/api/reservas` | Crear reserva |
-| GET | `/api/reservas/{id}` | Consultar reserva |
-| POST | `/api/reservas/listar` | Listar reservas |
-| POST | `/api/reservas/{id}/cancelar` | Cancelar reserva |
+| Método | Ruta | Descripción |
+|--------|------|-------------|
+| `POST` | `/api/holds/disponibilidad` | Verificar disponibilidad |
+| `POST` | `/api/holds` | Crear hold |
+| `POST` | `/api/holds/{id}/confirmar` | Confirmar hold |
+| `POST` | `/api/holds/{id}/cancelar` | Cancelar hold |
+| `POST` | `/api/reservas` | Crear reserva |
+| `GET` | `/api/reservas/{id}` | Ver reserva |
+| `POST` | `/api/reservas/listar` | Listar reservas |
+| `POST` | `/api/reservas/{id}/cancelar` | Cancelar reserva |
 
 ### Pedidos
-| Método | Endpoint | Descripción |
-|--------|----------|-------------|
-| POST | `/api/pedidos` | Crear pedido dine-in |
-| POST | `/api/pedidos/para-llevar` | Crear pedido takeaway |
-| GET | `/api/pedidos/{id}` | Consultar pedido |
-| POST | `/api/pedidos/{id}/items` | Agregar item |
-| PATCH | `/api/pedidos/{id}/completar` | Completar pedido |
-| PATCH | `/api/pedidos/{id}/cancelar` | Cancelar pedido |
-| POST | `/api/pedidos/listar` | Listar pedidos |
+| Método | Ruta | Descripción |
+|--------|------|-------------|
+| `POST` | `/api/pedidos` | Crear Dine-in |
+| `POST` | `/api/pedidos/para-llevar` | Crear Takeaway |
+| `POST` | `/api/pedidos/{id}/items` | Agregar item |
+| `GET` | `/api/pedidos/{id}` | Ver pedido |
+| `POST` | `/api/pedidos/listar` | Listar pedidos |
+| `PATCH` | `/api/pedidos/{id}/completar` | Completar pedido |
+| `PATCH` | `/api/pedidos/{id}/cancelar` | Cancelar pedido |
 
 ### Cupones
-| Método | Endpoint | Descripción |
-|--------|----------|-------------|
-| GET | `/api/campanias/cupones/mis-cupones` | Mis cupones |
-| POST | `/api/campanias/cupones/validar` | Validar cupón |
+| Método | Ruta | Descripción |
+|--------|------|-------------|
+| `GET` | `/api/campanias/cupones/mis-cupones` | Mis cupones |
+| `POST` | `/api/campanias/cupones/validar` | Validar cupón |
+| `GET` | `/api/campanias` | Ver campañas |
+| `POST` | `/api/pagos` | Pagar con cupón |
 
 ### Calificaciones
-| Método | Endpoint | Descripción |
-|--------|----------|-------------|
-| POST | `/api/calificaciones` | Crear calificación |
-| GET | `/api/calificaciones` | Listar calificaciones |
-
----
-
-## 🔄 Flujos Típicos
-
-### Reserva + Pedido Dine-in
-```
-1. GET /api/sucursales/activas   → Elegir sucursal
-2. GET /api/areas?sucursal_id=1  → Ver áreas
-3. GET /api/mesas?sucursal_id=1  → Elegir mesa disponible
-4. POST /api/holds               → Bloquear mesa (3 min)
-5. POST /api/reservas            → Crear reserva
-6. [Cliente llega al restaurante]
-7. GET /api/categorias           → Ver menú
-8. GET /api/productos            → Ver productos
-9. GET /api/combos               → Ver combos
-10. POST /api/pedidos            → Crear pedido con items
-11. [Esperar cocina]
-12. [Pagar en caja]
-13. POST /api/calificaciones     → Calificar servicio
-```
-
-### Pedido Para Llevar
-```
-1. GET /api/sucursales/activas   → Elegir sucursal
-2. GET /api/categorias           → Ver menú
-3. GET /api/productos            → Ver productos
-4. GET /api/combos               → Ver combos
-5. POST /api/pedidos/para-llevar → Crear pedido
-6. [Esperar notificación "Listo"]
-7. [Recoger - Auto-pagado]
-```
-
-### Usar Cupón
-```
-1. GET /api/campanias/cupones/mis-cupones → Ver cupones
-2. POST /api/campanias/cupones/validar    → Validar cupón
-3. [Aplicar descuento en pago]
-```
+| Método | Ruta | Descripción |
+|--------|------|-------------|
+| `POST` | `/api/calificaciones` | Calificar servicio |
+| `GET` | `/api/calificaciones` | Mis calificaciones |
+| `POST` | `/api/mejoras` | Enviar sugerencia |
+| `GET` | `/api/mejoras` | Mis sugerencias |

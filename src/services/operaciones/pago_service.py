@@ -27,6 +27,7 @@ from src.models import Pago, Pedido
 from src.models.operaciones.pedido_item_model import PedidoItem
 from src.models.operaciones.reserva_model import Reserva
 from src.models.marketing.campania_usuario_model import CampaniaUsuario
+from src.services.notification import NotificationService
 
 logger = logging.getLogger(__name__)
 
@@ -175,6 +176,26 @@ class PagoService:
                     f"Items actualizados={items_actualizados}, Reserva completada={reserva_completada}, "
                     f"Cupón usado={cupon_usado}"
                 )
+                
+                # Notificar pago recibido
+                try:
+                    NotificationService.notificar_pago_confirmado(
+                        pago_id=pago.id_pago,
+                        total=float(monto),
+                        sucursal_id=sucursal_id,
+                        cliente_id=pedido.cliente_id if hasattr(pedido, 'cliente_id') else None
+                    )
+                    
+                    # También notificar pedido pagado
+                    NotificationService.notificar_pedido_pagado(
+                        pedido_id=pedido_id,
+                        mesa_num=str(pedido.mesa_id) if pedido.mesa_id else 'N/A',
+                        total=float(monto),
+                        sucursal_id=sucursal_id,
+                        mesero_id=pedido.inicia_usuario_id if hasattr(pedido, 'inicia_usuario_id') else None
+                    )
+                except Exception as notif_error:
+                    logger.warning(f"Error enviando notificación de pago: {notif_error}")
                 
                 return {
                     'success': True,

@@ -6,6 +6,7 @@ Gestión de holds temporales durante proceso de reserva
 from datetime import datetime, timedelta
 from src.dao.operaciones.hold_mesa_dao import HoldMesaDAO
 from src.dao.catalogos.mesa_dao import MesaDAO
+from src.services.notification import NotificationService
 import logging
 
 logger = logging.getLogger(__name__)
@@ -80,6 +81,20 @@ class HoldMesaService:
                 f"Usuario={usuario_id}, TTL={ttl_minutes}min, "
                 f"Expira en={hold.get('fechahora_expiracion', 'N/A')}"
             )
+            
+            # Notificar a recepción sobre el hold
+            try:
+                sucursal_id = mesa.get('sucursal_id')
+                if sucursal_id:
+                    NotificationService.notificar_hold_creado(
+                        hold_id=hold['id_hold_mesa'],
+                        mesa_num=str(mesa_id),
+                        minutos=ttl_minutes,
+                        sucursal_id=sucursal_id
+                    )
+            except Exception as notif_error:
+                logger.warning(f"Error enviando notificación hold creado: {notif_error}")
+            
             return {"success": True, "data": hold}
             
         except Exception as e:
