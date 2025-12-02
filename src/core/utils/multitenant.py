@@ -20,6 +20,16 @@ def es_admin(usuario_id: int) -> bool:
             UsuarioRol.usuario_id == usuario_id
         ).first()
         return usuario_rol and usuario_rol.rol_id == 1
+    
+def es_cliente(usuario_id: int) -> bool:
+    """
+    ¿El usuario es empleado (rol_id=2)?
+    """
+    with get_db_session() as session:
+        usuario_rol = session.query(UsuarioRol).filter(
+            UsuarioRol.usuario_id == usuario_id
+        ).first()
+        return usuario_rol and usuario_rol.rol_id == 10
 
 
 def tiene_rol(usuario_id: int, rol_id: int) -> bool:
@@ -85,11 +95,15 @@ def obtener_sucursales_usuario(usuario_id: int) -> list:
     if es_admin(usuario_id):
         return []
     
+    sucursales = []
     # Empleado: obtener sus sucursales
     with get_db_session() as session:
-        sucursales = session.query(UsuarioSucursal.sucursal_id).filter(
-            UsuarioSucursal.usuario_id == usuario_id
-        ).all()
+        if es_cliente():
+            sucursales = session.query(UsuarioSucursal.id_usuario_sucursal)
+        else:
+            sucursales = session.query(UsuarioSucursal.sucursal_id).filter(
+                UsuarioSucursal.usuario_id == usuario_id
+            ).all()
         return [s[0] for s in sucursales]
 
 

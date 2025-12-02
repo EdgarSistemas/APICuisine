@@ -72,9 +72,15 @@ def expirar_holds_vencidos():
             
             # Filtrar los que vencieron
             ids_a_expirar = []
+            holds_data = []  # Para notificaciones
             for hold in holds_incompletos:
                 if hold.expires_at and hold.expires_at <= ahora:
                     ids_a_expirar.append(hold.id_hold_mesa)
+                    holds_data.append({
+                        'id': hold.id_hold_mesa,
+                        'mesa_id': hold.mesa_id,
+                        'cliente_id': hold.actor_usuario_id
+                    })
             
             # Actualizar solo los expirados
             if ids_a_expirar:
@@ -90,6 +96,19 @@ def expirar_holds_vencidos():
                 session.commit()
                 print(f"[ENDPOINT] ✓ {result} holds expirados")
                 logger.info(f"[ENDPOINT EXPIRAR HOLDS] {result} holds incompletos expirados")
+                
+                # Notificar a clientes sobre holds expirados
+                try:
+                    from src.services.notification import NotificationService
+                    for hold_info in holds_data:
+                        if hold_info['cliente_id']:
+                            NotificationService.notificar_hold_expirado(
+                                hold_id=hold_info['id'],
+                                mesa_num=str(hold_info['mesa_id']),
+                                cliente_id=hold_info['cliente_id']
+                            )
+                except Exception as notif_error:
+                    logger.warning(f"Error enviando notificaciones de holds expirados: {notif_error}")
                 
                 return jsonify({
                     "resultado": "éxito",
@@ -342,4 +361,145 @@ def trigger_reset_horarios():
             "success": False,
             "error": str(e),
             "mensaje": f"Error en trigger manual: {str(e)}"
+        }), 500
+
+
+# ============================================================================
+# JOB: RECORDATORIO DE RESERVAS
+# ============================================================================
+
+@jobs_bp.route('/recordatorio-reservas', methods=['POST'])
+def recordatorio_reservas():
+    """
+    POST /api/jobs/recordatorio-reservas
+    
+    🔧 ENDPOINT PARA AZURE FUNCTION (Scheduled Timer - cada 15 min)
+    
+    Job: Envía recordatorios a clientes con reservas en las próximas 2 horas.
+    Solo envía UN recordatorio por reserva (marca como notificada).
+    
+    LÓGICA:
+    - Busca reservas con estatus=1 (Programada)
+    - Donde inicio está entre ahora y ahora+2 horas
+    - Que NO hayan sido notificadas previamente
+    - Envía push notification al cliente
+    - Marca la reserva como notificada
+    
+    RESPUESTA (200):
+    {
+        "success": true,
+        "recordatorios_enviados": 5,
+        "reservas_procesadas": [123, 456, 789],
+        "errores": []
+    }
+    """
+    try:
+        from src.models.operaciones.reserva_model import Reserva
+        from src.models import Usuario
+        from src.services.notification import NotificationService
+        from src.core.db.session_manager import get_db_session
+        from datetime import datetime, timedelta
+        import pytz
+        
+        TZ_MEXICO = pytz.timezone('America/Mexico_City')
+        ahora = datetime.now(TZ_MEXICO).replace(tzinfo=None)
+        en_dos_horas = ahora + timedelta(hours=2)
+        
+        logger.info(f"[JOB RECORDATORIO] Iniciado - Buscando reservas entre {ahora} y {en_dos_horas}")
+        print(f"\n[JOB RECORDATORIO RESERVAS] Iniciado")
+        
+        enviados = 0
+        reservas_procesadas = []
+        errores = []
+        
+        with get_db_session() as session:
+            # Buscar reservas programadas para las próximas 2 horas
+            # que tengan cliente_id y no hayan sido notificadas
+            reservas = session.query(Reserva).filter(
+                Reserva.estatus == 1,  # Programada
+                Reserva.inicio >= ahora,
+                Reserva.inicio <= en_dos_horas,
+                Reserva.cliente_id.isnot(None)
+            ).all()
+            
+            # Filtrar las que ya fueron notificadas
+            reservas_a_notificar = [
+                r for r in reservas 
+                if not r.notas or '[RECORDATORIO_ENVIADO]' not in r.notas
+            ]
+            
+            print(f"[JOB RECORDATORIO] Encontradas {len(reservas_a_notificar)} reservas para notificar")
+            
+            for reserva in reservas_a_notificar:
+                try:
+                    # Obtener nombre del cliente
+                    cliente = session.query(Usuario).filter(
+                        Usuario.id_usuario == reserva.cliente_id
+                    ).first()
+                    
+                    cliente_nombre = cliente.nombre if cliente else "Cliente"
+                    hora_reserva = reserva.inicio.strftime('%H:%M')
+                    
+                    # Obtener número de mesa (si hay hold asociado)
+                    mesa_num = "asignada"
+                    if reserva.hold_id:
+                        from src.models.operaciones.hold_mesa_model import HoldMesa
+                        from src.models.catalogos.mesa_model import Mesa
+                        hold = session.query(HoldMesa).filter(
+                            HoldMesa.id_hold_mesa == reserva.hold_id
+                        ).first()
+                        if hold:
+                            mesa = session.query(Mesa).filter(
+                                Mesa.id_mesa == hold.mesa_id
+                            ).first()
+                            if mesa:
+                                mesa_num = mesa.numero_mesa or str(mesa.id_mesa)
+                    
+                    # Enviar notificación
+                    resultado = NotificationService.notificar_recordatorio_reserva(
+                        reserva_id=reserva.id_reserva,
+                        fecha_hora=hora_reserva,
+                        mesa_num=mesa_num,
+                        cliente_id=reserva.cliente_id
+                    )
+                    
+                    if resultado.get('success') or resultado.get('mensajes_exitosos', 0) > 0:
+                        # Marcar como notificada
+                        notas_actuales = reserva.notas or ""
+                        reserva.notas = f"{notas_actuales} [RECORDATORIO_ENVIADO:{ahora.isoformat()}]"
+                        enviados += 1
+                        reservas_procesadas.append(reserva.id_reserva)
+                        print(f"  ✓ Reserva {reserva.id_reserva} - {cliente_nombre} a las {hora_reserva}")
+                    else:
+                        errores.append({
+                            "reserva_id": reserva.id_reserva,
+                            "error": "Sin tokens o error de envío"
+                        })
+                        
+                except Exception as e:
+                    logger.error(f"Error procesando reserva {reserva.id_reserva}: {e}")
+                    errores.append({
+                        "reserva_id": reserva.id_reserva,
+                        "error": str(e)
+                    })
+            
+            session.commit()
+        
+        print(f"[JOB RECORDATORIO] ✓ Completado - {enviados} recordatorios enviados")
+        logger.info(f"[JOB RECORDATORIO] Completado - {enviados} enviados, {len(errores)} errores")
+        
+        return jsonify({
+            "success": True,
+            "recordatorios_enviados": enviados,
+            "reservas_procesadas": reservas_procesadas,
+            "errores": errores
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"[JOB RECORDATORIO] Error: {str(e)}", exc_info=True)
+        print(f"[JOB RECORDATORIO] ✗ Error: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "mensaje": f"Error en job recordatorio: {str(e)}"
         }), 500

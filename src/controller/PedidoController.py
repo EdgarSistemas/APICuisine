@@ -555,7 +555,7 @@ def listar_pedidos():
         else:
             from src.core.utils.multitenant import obtener_sucursales_usuario
             sucursales_usuario = obtener_sucursales_usuario(usuario_id)
-            if not sucursales_usuario:
+            if not sucursales_usuario :
                 return jsonify({"error": "Usuario sin sucursal asignada"}), 403
             sucursal_id = sucursales_usuario[0]  # Usar primera sucursal por defecto
         

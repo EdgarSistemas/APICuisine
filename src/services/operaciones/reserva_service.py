@@ -7,6 +7,7 @@ from datetime import datetime
 from src.dao.operaciones.reserva_dao import ReservaDAO
 from src.dao.operaciones.hold_mesa_dao import HoldMesaDAO
 from src.dao.catalogos.mesa_dao import MesaDAO
+from src.services.notification import NotificationService
 import logging
 import pytz
 
@@ -110,6 +111,32 @@ class ReservaService:
                 logger.info(f"Hold {hold_id} confirmado y convertido a reserva {reserva['id_reserva']}")
             
             logger.info(f"Reserva creada: ID {reserva['id_reserva']} para cliente {cliente_id}")
+            
+            # Notificar creación de reserva
+            try:
+                fecha_hora = inicio.strftime('%d/%m %H:%M') if isinstance(inicio, datetime) else str(inicio)
+                mesa_num = str(mesa_id) if mesa_id else 'Por asignar'
+                # Obtener sucursal_id del hold si existe
+                sucursal_id = None
+                if hold_id:
+                    hold_data = HoldMesaDAO.obtener_hold_por_id(hold_id)
+                    if hold_data:
+                        mesa_data = MesaDAO.obtener_mesa_por_id(hold_data.get('mesa_id'))
+                        if mesa_data:
+                            sucursal_id = mesa_data.get('sucursal_id')
+                
+                if sucursal_id:
+                    NotificationService.notificar_reserva_creada(
+                        reserva_id=reserva['id_reserva'],
+                        cliente_nombre='Cliente',  # TODO: obtener nombre del cliente
+                        fecha_hora=fecha_hora,
+                        mesa_num=mesa_num,
+                        sucursal_id=sucursal_id,
+                        cliente_id=cliente_id
+                    )
+            except Exception as notif_error:
+                logger.warning(f"Error enviando notificación de reserva creada: {notif_error}")
+            
             return {"success": True, "data": reserva}
             
         except ValueError as e:
@@ -282,6 +309,15 @@ class ReservaService:
             reserva_actualizada = ReservaDAO.iniciar_reserva(reserva_id)
             
             logger.info(f"Reserva {reserva_id} iniciada por usuario {usuario_id}")
+            
+            # Notificar que el cliente llegó
+            try:
+                # TODO: Obtener mesero_id asignado a la mesa
+                # Por ahora solo loggeamos, la notificación requiere mesero_id
+                pass
+            except Exception as notif_error:
+                logger.warning(f"Error enviando notificación reserva en curso: {notif_error}")
+            
             return {"success": True, "data": reserva_actualizada}
             
         except Exception as e:
@@ -320,6 +356,15 @@ class ReservaService:
             reserva_actualizada = ReservaDAO.completar_reserva(reserva_id)
             
             logger.info(f"Reserva {reserva_id} completada por usuario {usuario_id}")
+            
+            # Notificar que la reserva finalizó
+            try:
+                mesa_num = str(reserva.get('mesa_id', 'N/A'))
+                # TODO: Obtener sucursal_id de la reserva
+                pass
+            except Exception as notif_error:
+                logger.warning(f"Error enviando notificación reserva completada: {notif_error}")
+            
             return {"success": True, "data": reserva_actualizada}
             
         except Exception as e:
@@ -359,6 +404,17 @@ class ReservaService:
             reserva_actualizada = ReservaDAO.cancelar_reserva(reserva_id, motivo)
             
             logger.info(f"Reserva {reserva_id} cancelada por usuario {usuario_id}: {motivo}")
+            
+            # Notificar cancelación de reserva
+            try:
+                fecha_hora = reserva.get('inicio')
+                if isinstance(fecha_hora, datetime):
+                    fecha_hora = fecha_hora.strftime('%d/%m %H:%M')
+                # TODO: Obtener sucursal_id y cliente_id
+                pass
+            except Exception as notif_error:
+                logger.warning(f"Error enviando notificación reserva cancelada: {notif_error}")
+            
             return {"success": True, "data": reserva_actualizada}
             
         except Exception as e:
@@ -396,6 +452,14 @@ class ReservaService:
             reserva_actualizada = ReservaDAO.marcar_no_show(reserva_id)
             
             logger.info(f"Reserva {reserva_id} marcada como NoShow por usuario {usuario_id}")
+            
+            # Notificar no-show
+            try:
+                # TODO: Obtener sucursal_id y datos del cliente
+                pass
+            except Exception as notif_error:
+                logger.warning(f"Error enviando notificación no-show: {notif_error}")
+            
             return {"success": True, "data": reserva_actualizada}
             
         except Exception as e:
