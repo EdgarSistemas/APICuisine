@@ -510,162 +510,218 @@ def verificar_lotes_por_vencer():
     """
     POST /api/jobs/verificar-lotes-por-vencer
     
-    🔧 ENDPOINT PARA AZURE FUNCTION (Scheduled Timer)
+    🔧 ENDPOINT PARA AZURE FUNCTION (Scheduled Timer - 1x al día 8am)
     
-    Job: Verifica lotes de insumos próximos a vencer en todas las sucursales
-    y envía notificaciones al personal de almacén.
+    Job: Verifica lotes de insumos próximos a vencer en TODAS las sucursales
+    y envía notificaciones push a GERENTES y COMPRAS de cada sucursal.
     
     LÓGICA:
-    - Se ejecuta 1 vez al día desde Azure Function (ej: 8am)
-    - Busca lotes con fecha_caducidad en los próximos 7 días
-    - Agrupa por sucursal
-    - Envía notificación a usuarios de almacén de cada sucursal
+    - Obtiene TODAS las sucursales activas
+    - Para cada sucursal:
+      * Obtiene lotes próximos a vencer usando LoteDAO (misma lógica que Dashboard)
+      * Identifica lotes CRÍTICOS (<=7 días)
+      * Envía push notification a GERENTES de la sucursal
+      * Envía push notification a usuarios COMPRAS de la sucursal
+    - Retorna resumen detallado por sucursal
     
     Query params (opcionales):
-    - dias_anticipacion: int (default: 7) - días antes de vencimiento para alertar
+    - dias_proximidad: int (default: 30) - días antes de vencimiento para alertar
     
     RESPUESTA (200):
     {
         "success": true,
-        "lotes_por_vencer": 5,
-        "sucursales_notificadas": 2,
-        "detalle": [...]
+        "dias_proximidad": 30,
+        "total_lotes_por_vencer": 15,
+        "total_notificaciones_enviadas": 8,
+        "sucursales_procesadas": [...]
     }
     """
     try:
-        from src.models.inventario.lote_model import Lote
-        from src.models.inventario.recepcion_detalle_model import RecepcionDetalle
-        from src.models.inventario.recepcion_model import Recepcion
-        from src.models.catalogos.insumo_model import Insumo
-        from src.models.config.sucursal_model import Sucursal
-        from src.services.notification import NotificationService
+        from datetime import datetime
+        from src.dao.inventario.lote_dao import LoteDAO
+        from src.dao.auth.push_token_dao import PushTokenDAO
+        from src.core.utils.push_notifications import FCMNotificationService
         from src.core.db.session_manager import get_db_session
-        from datetime import datetime, timedelta
-        from sqlalchemy import and_
+        from src.models import Sucursal
         import pytz
         
         TZ_MEXICO = pytz.timezone('America/Mexico_City')
-        ahora = datetime.now(TZ_MEXICO).replace(tzinfo=None)
+        ahora = datetime.now(TZ_MEXICO)
         
-        # Parámetro opcional: días de anticipación (default 7)
-        dias_anticipacion = request.args.get('dias_anticipacion', 7, type=int)
-        fecha_limite = ahora + timedelta(days=dias_anticipacion)
+        # Parámetro opcional: días de proximidad (default 30)
+        data = request.get_json() or {}
+        dias_proximidad = data.get('dias_proximidad', 30)
         
-        logger.info(f"[JOB LOTES VENCER] Iniciado - Buscando lotes que vencen antes de {fecha_limite}")
-        print(f"\n[JOB LOTES POR VENCER] Iniciado - días anticipación: {dias_anticipacion}")
+        logger.info(f"[JOB LOTES VENCER] Iniciado - días proximidad: {dias_proximidad}")
+        print(f"\n[JOB LOTES POR VENCER] Iniciado - días proximidad: {dias_proximidad}")
         
+        # Obtener TODAS las sucursales activas
         with get_db_session() as session:
-            # Buscar lotes disponibles (estado=1) próximos a vencer
-            lotes_por_vencer = session.query(
-                Lote,
-                RecepcionDetalle,
-                Recepcion,
-                Insumo,
-                Sucursal
-            ).join(
-                RecepcionDetalle, Lote.det_recepcion_id == RecepcionDetalle.id_recepcion_det
-            ).join(
-                Recepcion, RecepcionDetalle.recepcion_id == Recepcion.id_recepcion
-            ).join(
-                Insumo, RecepcionDetalle.insumo_id == Insumo.id_insumo
-            ).join(
-                Sucursal, Recepcion.sucursal_id == Sucursal.id_sucursal
-            ).filter(
-                and_(
-                    Lote.estado == 1,  # Disponible
-                    Lote.cantidad_disponible > 0,
-                    Lote.fecha_caducidad.isnot(None),
-                    Lote.fecha_caducidad <= fecha_limite,
-                    Lote.fecha_caducidad >= ahora  # No incluir ya vencidos
-                )
+            sucursales = session.query(Sucursal).filter(
+                Sucursal.es_activa == True
             ).all()
+            sucursales_data = [(s.id_sucursal, s.nombre) for s in sucursales]
+        
+        print(f"[JOB LOTES VENCER] Procesando {len(sucursales_data)} sucursales")
+        
+        sucursales_procesadas = []
+        total_lotes_por_vencer = 0
+        total_notificaciones = 0
+        
+        # Procesar cada sucursal
+        for sucursal_id, sucursal_nombre in sucursales_data:
+            print(f"  → Verificando sucursal: {sucursal_nombre} (ID: {sucursal_id})")
             
-            print(f"[JOB LOTES VENCER] Encontrados {len(lotes_por_vencer)} lotes próximos a vencer")
+            # 1. Obtener lotes próximos a vencer usando LoteDAO
+            lotes_por_vencer = LoteDAO.obtener_lotes_proximos_a_vencer(
+                sucursal_id=sucursal_id,
+                dias_proximidad=dias_proximidad
+            )
             
             if not lotes_por_vencer:
-                return jsonify({
-                    "success": True,
+                print(f"    ✓ Sin lotes próximos a vencer")
+                sucursales_procesadas.append({
+                    "sucursal_id": sucursal_id,
+                    "sucursal_nombre": sucursal_nombre,
                     "lotes_por_vencer": 0,
-                    "sucursales_notificadas": 0,
-                    "mensaje": "No hay lotes próximos a vencer"
-                }), 200
-            
-            # Agrupar por sucursal
-            lotes_por_sucursal = {}
-            for lote, det_rec, recepcion, insumo, sucursal in lotes_por_vencer:
-                suc_id = sucursal.id_sucursal
-                if suc_id not in lotes_por_sucursal:
-                    lotes_por_sucursal[suc_id] = {
-                        "sucursal_nombre": sucursal.nombre,
-                        "lotes": []
-                    }
-                
-                dias_restantes = (lote.fecha_caducidad - ahora).days
-                lotes_por_sucursal[suc_id]["lotes"].append({
-                    "id_lote": lote.id_lote,
-                    "lote_num": lote.lote or lote.lote_proveedor,
-                    "insumo_nombre": insumo.nombre,
-                    "cantidad_disponible": float(lote.cantidad_disponible),
-                    "fecha_caducidad": lote.fecha_caducidad.strftime('%Y-%m-%d'),
-                    "dias_restantes": dias_restantes
+                    "lotes_criticos": 0,
+                    "usuarios_notificados": {"gerentes": 0, "compras": 0},
+                    "notificaciones_enviadas": {"gerentes": 0, "compras": 0}
                 })
+                continue
             
-            # Enviar notificaciones por sucursal
-            sucursales_notificadas = 0
-            detalle_envios = []
+            # Contar lotes críticos (<=7 días)
+            lotes_criticos = [l for l in lotes_por_vencer if l['dias_para_vencer'] <= 7]
             
-            for suc_id, data in lotes_por_sucursal.items():
-                try:
-                    # Construir mensaje
-                    num_lotes = len(data["lotes"])
-                    
-                    # Crear resumen de los primeros 3 lotes
-                    resumen_lotes = []
-                    for lote_info in data["lotes"][:3]:
-                        resumen_lotes.append(
-                            f"• {lote_info['insumo_nombre']}: {lote_info['dias_restantes']} días"
-                        )
-                    
-                    resumen_texto = "\n".join(resumen_lotes)
-                    if num_lotes > 3:
-                        resumen_texto += f"\n... y {num_lotes - 3} más"
-                    
-                    # Enviar notificación
-                    resultado = NotificationService.notificar_lote_por_vencer(
-                        lote_num=f"{num_lotes} lotes",
-                        insumo_nombre=data["sucursal_nombre"],
-                        dias_restantes=dias_anticipacion,
-                        sucursal_id=suc_id
-                    )
-                    
-                    if resultado.get('success') or resultado.get('mensajes_exitosos', 0) > 0:
-                        sucursales_notificadas += 1
-                        print(f"  ✓ Sucursal {data['sucursal_nombre']}: {num_lotes} lotes notificados")
-                    
-                    detalle_envios.append({
-                        "sucursal_id": suc_id,
-                        "sucursal_nombre": data["sucursal_nombre"],
-                        "lotes_count": num_lotes,
-                        "notificacion_enviada": resultado.get('success', False),
-                        "lotes": data["lotes"]
-                    })
-                    
-                except Exception as e:
-                    logger.error(f"Error notificando sucursal {suc_id}: {e}")
-                    detalle_envios.append({
-                        "sucursal_id": suc_id,
-                        "sucursal_nombre": data["sucursal_nombre"],
-                        "error": str(e)
-                    })
+            print(f"    ⚠ {len(lotes_por_vencer)} lotes por vencer ({len(lotes_criticos)} críticos)")
+            total_lotes_por_vencer += len(lotes_por_vencer)
+            
+            notificaciones_gerentes = 0
+            notificaciones_compras = 0
+            
+            # Construir mensaje de notificación
+            titulo = "📦 Lotes próximos a vencer"
+            if len(lotes_criticos) > 0:
+                titulo = "🚨 Lotes CRÍTICOS por vencer"
+                cuerpo = f"{len(lotes_criticos)} lote(s) vencen en 7 días o menos - {sucursal_nombre}"
+            else:
+                cuerpo = f"{len(lotes_por_vencer)} lote(s) próximos a vencer - {sucursal_nombre}"
+            
+            # Preparar datos adicionales para la notificación
+            datos_notificacion = {
+                "tipo_alerta": "lotes_por_vencer",
+                "sucursal_id": str(sucursal_id),
+                "total_lotes": str(len(lotes_por_vencer)),
+                "lotes_criticos": str(len(lotes_criticos)),
+                "lotes_resumen": str([
+                    {
+                        "insumo": l['insumo_nombre'],
+                        "dias": l['dias_para_vencer'],
+                        "cantidad": l['cantidad_disponible'],
+                        "urgencia": l['urgencia']
+                    }
+                    for l in lotes_por_vencer[:5]  # Primeros 5
+                ])
+            }
+            
+            # 2. NOTIFICAR A GERENTES
+            usuarios_gerentes = PushTokenDAO.obtener_usuarios_con_push_tokens(
+                filtros_usuario={
+                    'rol': 'GERENTE',
+                    'sucursal_id': sucursal_id
+                },
+                filtros_push_token={'es_activo': True},
+                solo_activos=True
+            )
+            
+            if usuarios_gerentes:
+                tokens_gerentes = []
+                plataformas_gerentes = {}
+                
+                for usuario_data in usuarios_gerentes:
+                    for token_data in usuario_data['push_tokens']:
+                        token = token_data['token']
+                        tokens_gerentes.append(token)
+                        plataformas_gerentes[token] = token_data.get('plataforma', 'desconocida')
+                
+                print(f"    → Notificando a {len(usuarios_gerentes)} gerentes")
+                resultado_gerentes = FCMNotificationService.enviar_notificacion_simple(
+                    tokens=tokens_gerentes,
+                    titulo=titulo,
+                    cuerpo=cuerpo,
+                    datos_personalizados=datos_notificacion,
+                    plataformas=plataformas_gerentes
+                )
+                notificaciones_gerentes = resultado_gerentes.get('mensajes_exitosos', 0)
+                total_notificaciones += notificaciones_gerentes
+            
+            # 3. NOTIFICAR A COMPRAS
+            usuarios_compras = PushTokenDAO.obtener_usuarios_con_push_tokens(
+                filtros_usuario={
+                    'rol': 'COMPRAS',
+                    'sucursal_id': sucursal_id
+                },
+                filtros_push_token={'es_activo': True},
+                solo_activos=True
+            )
+            
+            if usuarios_compras:
+                tokens_compras = []
+                plataformas_compras = {}
+                
+                for usuario_data in usuarios_compras:
+                    for token_data in usuario_data['push_tokens']:
+                        token = token_data['token']
+                        tokens_compras.append(token)
+                        plataformas_compras[token] = token_data.get('plataforma', 'desconocida')
+                
+                print(f"    → Notificando a {len(usuarios_compras)} usuarios COMPRAS")
+                resultado_compras = FCMNotificationService.enviar_notificacion_simple(
+                    tokens=tokens_compras,
+                    titulo=titulo,
+                    cuerpo=cuerpo,
+                    datos_personalizados=datos_notificacion,
+                    plataformas=plataformas_compras
+                )
+                notificaciones_compras = resultado_compras.get('mensajes_exitosos', 0)
+                total_notificaciones += notificaciones_compras
+            
+            sucursales_procesadas.append({
+                "sucursal_id": sucursal_id,
+                "sucursal_nombre": sucursal_nombre,
+                "lotes_por_vencer": len(lotes_por_vencer),
+                "lotes_criticos": len(lotes_criticos),
+                "lotes_detalle": [
+                    {
+                        "insumo_nombre": l['insumo_nombre'],
+                        "lote": l['lote'],
+                        "dias_para_vencer": l['dias_para_vencer'],
+                        "urgencia": l['urgencia'],
+                        "cantidad_disponible": l['cantidad_disponible'],
+                        "unidad": l['unidad_clave']
+                    }
+                    for l in lotes_por_vencer
+                ],
+                "usuarios_notificados": {
+                    "gerentes": len(usuarios_gerentes) if usuarios_gerentes else 0,
+                    "compras": len(usuarios_compras) if usuarios_compras else 0
+                },
+                "notificaciones_enviadas": {
+                    "gerentes": notificaciones_gerentes,
+                    "compras": notificaciones_compras
+                }
+            })
         
-        print(f"[JOB LOTES VENCER] ✓ Completado - {len(lotes_por_vencer)} lotes, {sucursales_notificadas} sucursales notificadas")
+        print(f"[JOB LOTES VENCER] ✓ Completado - {total_lotes_por_vencer} lotes, {total_notificaciones} notificaciones")
+        logger.info(f"[JOB LOTES VENCER] Completado: {total_lotes_por_vencer} lotes, {total_notificaciones} notificaciones")
         
         return jsonify({
             "success": True,
-            "lotes_por_vencer": len(lotes_por_vencer),
-            "sucursales_notificadas": sucursales_notificadas,
-            "dias_anticipacion": dias_anticipacion,
-            "detalle": detalle_envios
+            "timestamp": ahora.isoformat(),
+            "dias_proximidad": dias_proximidad,
+            "total_lotes_por_vencer": total_lotes_por_vencer,
+            "total_notificaciones_enviadas": total_notificaciones,
+            "sucursales_procesadas": sucursales_procesadas
         }), 200
         
     except Exception as e:
@@ -675,5 +731,226 @@ def verificar_lotes_por_vencer():
             "success": False,
             "error": str(e),
             "mensaje": f"Error verificando lotes: {str(e)}"
+        }), 500
+
+
+# ============================================================================
+# JOB: VERIFICAR LOTES VENCIDOS
+# ============================================================================
+
+@jobs_bp.route('/verificar-lotes-vencidos', methods=['POST'])
+def verificar_lotes_vencidos():
+    """
+    POST /api/jobs/verificar-lotes-vencidos
+    
+    🔧 ENDPOINT PARA AZURE FUNCTION (Scheduled Timer - 1x al día 8am)
+    
+    Job: Verifica lotes YA VENCIDOS en TODAS las sucursales
+    y envía notificaciones push a GERENTES y ALMACEN de cada sucursal.
+    
+    LÓGICA:
+    - Obtiene TODAS las sucursales activas
+    - Para cada sucursal:
+      * Obtiene lotes vencidos usando LoteDAO (misma lógica que Dashboard)
+      * Calcula el costo total de pérdida
+      * Envía push notification a GERENTES de la sucursal
+      * Envía push notification a usuarios ALMACEN de la sucursal
+    - Retorna resumen detallado por sucursal
+    
+    RESPUESTA (200):
+    {
+        "success": true,
+        "total_lotes_vencidos": 5,
+        "costo_total_perdida": 2500.00,
+        "total_notificaciones_enviadas": 4,
+        "sucursales_procesadas": [...]
+    }
+    """
+    try:
+        from datetime import datetime
+        from src.dao.inventario.lote_dao import LoteDAO
+        from src.dao.auth.push_token_dao import PushTokenDAO
+        from src.core.utils.push_notifications import FCMNotificationService
+        from src.core.db.session_manager import get_db_session
+        from src.models import Sucursal
+        import pytz
+        
+        TZ_MEXICO = pytz.timezone('America/Mexico_City')
+        ahora = datetime.now(TZ_MEXICO)
+        
+        logger.info(f"[JOB LOTES VENCIDOS] Iniciado")
+        print(f"\n[JOB LOTES VENCIDOS] Iniciado")
+        
+        # Obtener TODAS las sucursales activas
+        with get_db_session() as session:
+            sucursales = session.query(Sucursal).filter(
+                Sucursal.es_activa == True
+            ).all()
+            sucursales_data = [(s.id_sucursal, s.nombre) for s in sucursales]
+        
+        print(f"[JOB LOTES VENCIDOS] Procesando {len(sucursales_data)} sucursales")
+        
+        sucursales_procesadas = []
+        total_lotes_vencidos = 0
+        costo_total_global = 0.0
+        total_notificaciones = 0
+        
+        # Procesar cada sucursal
+        for sucursal_id, sucursal_nombre in sucursales_data:
+            print(f"  → Verificando sucursal: {sucursal_nombre} (ID: {sucursal_id})")
+            
+            # 1. Obtener lotes vencidos usando LoteDAO
+            lotes_vencidos = LoteDAO.obtener_lotes_vencidos(sucursal_id=sucursal_id)
+            
+            if not lotes_vencidos:
+                print(f"    ✓ Sin lotes vencidos")
+                sucursales_procesadas.append({
+                    "sucursal_id": sucursal_id,
+                    "sucursal_nombre": sucursal_nombre,
+                    "lotes_vencidos": 0,
+                    "costo_perdida": 0.0,
+                    "usuarios_notificados": {"gerentes": 0, "almacen": 0},
+                    "notificaciones_enviadas": {"gerentes": 0, "almacen": 0}
+                })
+                continue
+            
+            # Calcular costo de pérdida
+            costo_perdida_sucursal = sum([l['costo_total_perdida'] for l in lotes_vencidos])
+            
+            print(f"    🚨 {len(lotes_vencidos)} lotes vencidos - Pérdida: ${costo_perdida_sucursal:,.2f}")
+            total_lotes_vencidos += len(lotes_vencidos)
+            costo_total_global += costo_perdida_sucursal
+            
+            notificaciones_gerentes = 0
+            notificaciones_almacen = 0
+            
+            # Construir mensaje de notificación
+            titulo = "🚨 ALERTA: Lotes VENCIDOS"
+            cuerpo = f"{len(lotes_vencidos)} lote(s) vencidos - Pérdida: ${costo_perdida_sucursal:,.2f} - {sucursal_nombre}"
+            
+            # Preparar datos adicionales para la notificación
+            datos_notificacion = {
+                "tipo_alerta": "lotes_vencidos",
+                "sucursal_id": str(sucursal_id),
+                "total_lotes": str(len(lotes_vencidos)),
+                "costo_perdida": str(costo_perdida_sucursal),
+                "lotes_resumen": str([
+                    {
+                        "insumo": l['insumo_nombre'],
+                        "dias_vencido": l['dias_vencido'],
+                        "cantidad": l['cantidad_disponible'],
+                        "costo": l['costo_total_perdida']
+                    }
+                    for l in lotes_vencidos[:5]  # Primeros 5
+                ])
+            }
+            
+            # 2. NOTIFICAR A GERENTES
+            usuarios_gerentes = PushTokenDAO.obtener_usuarios_con_push_tokens(
+                filtros_usuario={
+                    'rol': 'GERENTE',
+                    'sucursal_id': sucursal_id
+                },
+                filtros_push_token={'es_activo': True},
+                solo_activos=True
+            )
+            
+            if usuarios_gerentes:
+                tokens_gerentes = []
+                plataformas_gerentes = {}
+                
+                for usuario_data in usuarios_gerentes:
+                    for token_data in usuario_data['push_tokens']:
+                        token = token_data['token']
+                        tokens_gerentes.append(token)
+                        plataformas_gerentes[token] = token_data.get('plataforma', 'desconocida')
+                
+                print(f"    → Notificando a {len(usuarios_gerentes)} gerentes")
+                resultado_gerentes = FCMNotificationService.enviar_notificacion_simple(
+                    tokens=tokens_gerentes,
+                    titulo=titulo,
+                    cuerpo=cuerpo,
+                    datos_personalizados=datos_notificacion,
+                    plataformas=plataformas_gerentes
+                )
+                notificaciones_gerentes = resultado_gerentes.get('mensajes_exitosos', 0)
+                total_notificaciones += notificaciones_gerentes
+            
+            # 3. NOTIFICAR A ALMACEN
+            usuarios_almacen = PushTokenDAO.obtener_usuarios_con_push_tokens(
+                filtros_usuario={
+                    'rol': 'ALMACEN',
+                    'sucursal_id': sucursal_id
+                },
+                filtros_push_token={'es_activo': True},
+                solo_activos=True
+            )
+            
+            if usuarios_almacen:
+                tokens_almacen = []
+                plataformas_almacen = {}
+                
+                for usuario_data in usuarios_almacen:
+                    for token_data in usuario_data['push_tokens']:
+                        token = token_data['token']
+                        tokens_almacen.append(token)
+                        plataformas_almacen[token] = token_data.get('plataforma', 'desconocida')
+                
+                print(f"    → Notificando a {len(usuarios_almacen)} usuarios ALMACEN")
+                resultado_almacen = FCMNotificationService.enviar_notificacion_simple(
+                    tokens=tokens_almacen,
+                    titulo=titulo,
+                    cuerpo=cuerpo,
+                    datos_personalizados=datos_notificacion,
+                    plataformas=plataformas_almacen
+                )
+                notificaciones_almacen = resultado_almacen.get('mensajes_exitosos', 0)
+                total_notificaciones += notificaciones_almacen
+            
+            sucursales_procesadas.append({
+                "sucursal_id": sucursal_id,
+                "sucursal_nombre": sucursal_nombre,
+                "lotes_vencidos": len(lotes_vencidos),
+                "costo_perdida": costo_perdida_sucursal,
+                "lotes_detalle": [
+                    {
+                        "insumo_nombre": l['insumo_nombre'],
+                        "lote": l['lote'],
+                        "dias_vencido": l['dias_vencido'],
+                        "cantidad_disponible": l['cantidad_disponible'],
+                        "costo_perdida": l['costo_total_perdida'],
+                        "unidad": l['unidad_clave']
+                    }
+                    for l in lotes_vencidos
+                ],
+                "usuarios_notificados": {
+                    "gerentes": len(usuarios_gerentes) if usuarios_gerentes else 0,
+                    "almacen": len(usuarios_almacen) if usuarios_almacen else 0
+                },
+                "notificaciones_enviadas": {
+                    "gerentes": notificaciones_gerentes,
+                    "almacen": notificaciones_almacen
+                }
+            })
+        
+        print(f"[JOB LOTES VENCIDOS] ✓ Completado - {total_lotes_vencidos} lotes, ${costo_total_global:,.2f} pérdida, {total_notificaciones} notificaciones")
+        logger.info(f"[JOB LOTES VENCIDOS] Completado: {total_lotes_vencidos} lotes, ${costo_total_global:,.2f} pérdida")
+        
+        return jsonify({
+            "success": True,
+            "timestamp": ahora.isoformat(),
+            "total_lotes_vencidos": total_lotes_vencidos,
+            "costo_total_perdida": round(costo_total_global, 2),
+            "total_notificaciones_enviadas": total_notificaciones,
+            "sucursales_procesadas": sucursales_procesadas
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"[JOB LOTES VENCIDOS] Error: {str(e)}", exc_info=True)
+        print(f"[JOB LOTES VENCIDOS] ✗ Error: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "mensaje": f"Error verificando lotes vencidos: {str(e)}"
         }), 500
 
