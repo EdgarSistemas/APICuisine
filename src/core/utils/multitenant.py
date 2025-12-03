@@ -66,12 +66,17 @@ def validar_acceso_sucursal(usuario_id: int, sucursal_id: int) -> bool:
     """
     ¿El usuario tiene acceso a esta sucursal?
     - Admin: SÍ (acceso a todas)
+    - Cliente: SÍ (pueden ver cualquier sucursal para reservar)
     - Empleado: SÍ si está en UsuarioSucursal
     
     Retorna: True/False
     """
     # Admin siempre tiene acceso
     if es_admin(usuario_id):
+        return True
+    
+    # Cliente siempre tiene acceso (necesita ver sucursales/áreas/mesas para reservar)
+    if es_cliente(usuario_id):
         return True
     
     # Empleado: verificar en UsuarioSucursal

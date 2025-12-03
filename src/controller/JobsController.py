@@ -503,3 +503,176 @@ def recordatorio_reservas():
             "error": str(e),
             "mensaje": f"Error en job recordatorio: {str(e)}"
         }), 500
+
+
+@jobs_bp.route('/verificar-lotes-por-vencer', methods=['POST'])
+def verificar_lotes_por_vencer():
+    """
+    POST /api/jobs/verificar-lotes-por-vencer
+    
+    🔧 ENDPOINT PARA AZURE FUNCTION (Scheduled Timer)
+    
+    Job: Verifica lotes de insumos próximos a vencer en todas las sucursales
+    y envía notificaciones al personal de almacén.
+    
+    LÓGICA:
+    - Se ejecuta 1 vez al día desde Azure Function (ej: 8am)
+    - Busca lotes con fecha_caducidad en los próximos 7 días
+    - Agrupa por sucursal
+    - Envía notificación a usuarios de almacén de cada sucursal
+    
+    Query params (opcionales):
+    - dias_anticipacion: int (default: 7) - días antes de vencimiento para alertar
+    
+    RESPUESTA (200):
+    {
+        "success": true,
+        "lotes_por_vencer": 5,
+        "sucursales_notificadas": 2,
+        "detalle": [...]
+    }
+    """
+    try:
+        from src.models.inventario.lote_model import Lote
+        from src.models.inventario.recepcion_model import RecepcionDetalle, Recepcion
+        from src.models.catalogos.insumo_model import Insumo
+        from src.models.config.sucursal_model import Sucursal
+        from src.services.notification import NotificationService
+        from src.core.db.session_manager import get_db_session
+        from datetime import datetime, timedelta
+        from sqlalchemy import and_
+        import pytz
+        
+        TZ_MEXICO = pytz.timezone('America/Mexico_City')
+        ahora = datetime.now(TZ_MEXICO).replace(tzinfo=None)
+        
+        # Parámetro opcional: días de anticipación (default 7)
+        dias_anticipacion = request.args.get('dias_anticipacion', 7, type=int)
+        fecha_limite = ahora + timedelta(days=dias_anticipacion)
+        
+        logger.info(f"[JOB LOTES VENCER] Iniciado - Buscando lotes que vencen antes de {fecha_limite}")
+        print(f"\n[JOB LOTES POR VENCER] Iniciado - días anticipación: {dias_anticipacion}")
+        
+        with get_db_session() as session:
+            # Buscar lotes disponibles (estado=1) próximos a vencer
+            lotes_por_vencer = session.query(
+                Lote,
+                RecepcionDetalle,
+                Recepcion,
+                Insumo,
+                Sucursal
+            ).join(
+                RecepcionDetalle, Lote.det_recepcion_id == RecepcionDetalle.id_recepcion_det
+            ).join(
+                Recepcion, RecepcionDetalle.recepcion_id == Recepcion.id_recepcion
+            ).join(
+                Insumo, RecepcionDetalle.insumo_id == Insumo.id_insumo
+            ).join(
+                Sucursal, Recepcion.sucursal_id == Sucursal.id_sucursal
+            ).filter(
+                and_(
+                    Lote.estado == 1,  # Disponible
+                    Lote.cantidad_disponible > 0,
+                    Lote.fecha_caducidad.isnot(None),
+                    Lote.fecha_caducidad <= fecha_limite,
+                    Lote.fecha_caducidad >= ahora  # No incluir ya vencidos
+                )
+            ).all()
+            
+            print(f"[JOB LOTES VENCER] Encontrados {len(lotes_por_vencer)} lotes próximos a vencer")
+            
+            if not lotes_por_vencer:
+                return jsonify({
+                    "success": True,
+                    "lotes_por_vencer": 0,
+                    "sucursales_notificadas": 0,
+                    "mensaje": "No hay lotes próximos a vencer"
+                }), 200
+            
+            # Agrupar por sucursal
+            lotes_por_sucursal = {}
+            for lote, det_rec, recepcion, insumo, sucursal in lotes_por_vencer:
+                suc_id = sucursal.id_sucursal
+                if suc_id not in lotes_por_sucursal:
+                    lotes_por_sucursal[suc_id] = {
+                        "sucursal_nombre": sucursal.nombre,
+                        "lotes": []
+                    }
+                
+                dias_restantes = (lote.fecha_caducidad - ahora).days
+                lotes_por_sucursal[suc_id]["lotes"].append({
+                    "id_lote": lote.id_lote,
+                    "lote_num": lote.lote or lote.lote_proveedor,
+                    "insumo_nombre": insumo.nombre,
+                    "cantidad_disponible": float(lote.cantidad_disponible),
+                    "fecha_caducidad": lote.fecha_caducidad.strftime('%Y-%m-%d'),
+                    "dias_restantes": dias_restantes
+                })
+            
+            # Enviar notificaciones por sucursal
+            sucursales_notificadas = 0
+            detalle_envios = []
+            
+            for suc_id, data in lotes_por_sucursal.items():
+                try:
+                    # Construir mensaje
+                    num_lotes = len(data["lotes"])
+                    
+                    # Crear resumen de los primeros 3 lotes
+                    resumen_lotes = []
+                    for lote_info in data["lotes"][:3]:
+                        resumen_lotes.append(
+                            f"• {lote_info['insumo_nombre']}: {lote_info['dias_restantes']} días"
+                        )
+                    
+                    resumen_texto = "\n".join(resumen_lotes)
+                    if num_lotes > 3:
+                        resumen_texto += f"\n... y {num_lotes - 3} más"
+                    
+                    # Enviar notificación
+                    resultado = NotificationService.notificar_lote_por_vencer(
+                        lote_num=f"{num_lotes} lotes",
+                        insumo_nombre=data["sucursal_nombre"],
+                        dias_restantes=dias_anticipacion,
+                        sucursal_id=suc_id
+                    )
+                    
+                    if resultado.get('success') or resultado.get('mensajes_exitosos', 0) > 0:
+                        sucursales_notificadas += 1
+                        print(f"  ✓ Sucursal {data['sucursal_nombre']}: {num_lotes} lotes notificados")
+                    
+                    detalle_envios.append({
+                        "sucursal_id": suc_id,
+                        "sucursal_nombre": data["sucursal_nombre"],
+                        "lotes_count": num_lotes,
+                        "notificacion_enviada": resultado.get('success', False),
+                        "lotes": data["lotes"]
+                    })
+                    
+                except Exception as e:
+                    logger.error(f"Error notificando sucursal {suc_id}: {e}")
+                    detalle_envios.append({
+                        "sucursal_id": suc_id,
+                        "sucursal_nombre": data["sucursal_nombre"],
+                        "error": str(e)
+                    })
+        
+        print(f"[JOB LOTES VENCER] ✓ Completado - {len(lotes_por_vencer)} lotes, {sucursales_notificadas} sucursales notificadas")
+        
+        return jsonify({
+            "success": True,
+            "lotes_por_vencer": len(lotes_por_vencer),
+            "sucursales_notificadas": sucursales_notificadas,
+            "dias_anticipacion": dias_anticipacion,
+            "detalle": detalle_envios
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"[JOB LOTES VENCER] Error: {str(e)}", exc_info=True)
+        print(f"[JOB LOTES VENCER] ✗ Error: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "mensaje": f"Error verificando lotes: {str(e)}"
+        }), 500
+
