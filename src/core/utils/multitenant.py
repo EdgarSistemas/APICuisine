@@ -98,7 +98,7 @@ def obtener_sucursales_usuario(usuario_id: int) -> list:
     sucursales = []
     # Empleado: obtener sus sucursales
     with get_db_session() as session:
-        if es_cliente():
+        if es_cliente(usuario_id):
             sucursales = session.query(UsuarioSucursal.id_usuario_sucursal)
         else:
             sucursales = session.query(UsuarioSucursal.sucursal_id).filter(
