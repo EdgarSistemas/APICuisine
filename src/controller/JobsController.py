@@ -540,6 +540,7 @@ def verificar_lotes_por_vencer():
         from datetime import datetime
         from src.dao.inventario.lote_dao import LoteDAO
         from src.dao.auth.push_token_dao import PushTokenDAO
+        from src.core.utils.stock_alerts import PushTokenDAO as tokenDAO
         from src.core.utils.push_notifications import FCMNotificationService
         from src.core.db.session_manager import get_db_session
         from src.models import Sucursal
@@ -626,7 +627,7 @@ def verificar_lotes_por_vencer():
             }
             
             # 2. NOTIFICAR A GERENTES
-            usuarios_gerentes = PushTokenDAO.obtener_usuarios_con_push_tokens(
+            usuarios_gerentes = tokenDAO.obtener_usuarios_con_push_tokens(
                 filtros_usuario={
                     'rol': 'GERENTE',
                     'sucursal_id': sucursal_id
@@ -657,7 +658,7 @@ def verificar_lotes_por_vencer():
                 total_notificaciones += notificaciones_gerentes
             
             # 3. NOTIFICAR A COMPRAS
-            usuarios_compras = PushTokenDAO.obtener_usuarios_con_push_tokens(
+            usuarios_compras = tokenDAO.obtener_usuarios_con_push_tokens(
                 filtros_usuario={
                     'rol': 'COMPRAS',
                     'sucursal_id': sucursal_id
