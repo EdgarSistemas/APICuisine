@@ -17,7 +17,7 @@ class Ticket(BaseModel):
     id_ticket = Column(Integer, primary_key=True, autoincrement=True)
     usuario_id = Column(Integer, ForeignKey('seguridad.Usuario.id_usuario'), nullable=False)
     notas = Column(String(500), nullable=True)
-    imagen_url = Column(String(500), nullable=True)  # blob -> String para URL
+    imagen_url = Column(String(length=None), nullable=True)  # blob -> String para URL
     estatus = Column(SmallInteger, nullable=False, default=1)  # 1=Registrada, 2=EnProceso, 3=Completada, 4=Cancelada
     created_at = Column(DateTime, nullable=False, default=func.getdate())
     

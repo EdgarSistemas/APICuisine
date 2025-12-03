@@ -549,7 +549,8 @@ def verificar_lotes_por_vencer():
         ahora = datetime.now(TZ_MEXICO)
         
         # Parámetro opcional: días de proximidad (default 30)
-        data = request.get_json() or {}
+        # Usar silent=True para evitar error 415 si no hay Content-Type JSON
+        data = request.get_json(silent=True) or {}
         dias_proximidad = data.get('dias_proximidad', 30)
         
         logger.info(f"[JOB LOTES VENCER] Iniciado - días proximidad: {dias_proximidad}")
