@@ -534,7 +534,8 @@ def verificar_lotes_por_vencer():
     """
     try:
         from src.models.inventario.lote_model import Lote
-        from src.models.inventario.recepcion_model import RecepcionDetalle, Recepcion
+        from src.models.inventario.recepcion_detalle_model import RecepcionDetalle
+        from src.models.inventario.recepcion_model import Recepcion
         from src.models.catalogos.insumo_model import Insumo
         from src.models.config.sucursal_model import Sucursal
         from src.services.notification import NotificationService
