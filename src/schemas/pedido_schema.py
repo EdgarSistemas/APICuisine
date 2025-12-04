@@ -168,6 +168,8 @@ class PedidoListSchema(Schema):
     """Schema para listar Pedidos (resumen)"""
     id_pedido = fields.Int()
     folio = fields.Str()
+    sucursal_id = fields.Int(allow_none=True)
+    sucursal_nombre = fields.Str(allow_none=True)  # Para clientes que ven pedidos de múltiples sucursales
     cliente_id = fields.Int()
     tipo_pedido = fields.Int()
     canal = fields.Int()
