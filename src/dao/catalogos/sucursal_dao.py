@@ -6,6 +6,7 @@ from typing import List, Optional, Dict, Any
 from sqlalchemy import and_, or_, desc, asc, func
 from sqlalchemy.exc import SQLAlchemyError
 from src.models.catalogos.sucursal import Sucursal
+from src.models.auth.usuario_sucursal import UsuarioSucursal
 
 from src.core.db.session_manager import get_db_session
 from src.schemas.sucursal_schema import SucursalResponseSchema
@@ -82,6 +83,21 @@ class SucursalDAO:
         with get_db_session() as session:
             sucursales = session.query(Sucursal).filter(
                 Sucursal.es_activa == True
+            ).order_by(asc(Sucursal.nombre)).all()
+            return schema.dump(sucursales)
+        
+    def listar_por_gerente(self, id_usuario) -> List[dict]:
+        """
+        Lista todas las sucursales con su gerente asignado (serializado)
+        Uniendo con UsuarioSucursal para filtrar por gerente
+        """
+        schema = SucursalResponseSchema(many=True)
+        with get_db_session() as session:
+            sucursales = session.query(Sucursal).filter(
+                Sucursal.es_activa == True
+            ).join(UsuarioSucursal, Sucursal.id_sucursal == UsuarioSucursal.sucursal_id
+            ).filter(
+                UsuarioSucursal.usuario_id == id_usuario
             ).order_by(asc(Sucursal.nombre)).all()
             return schema.dump(sucursales)
     
