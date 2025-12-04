@@ -442,7 +442,7 @@ class PedidoDAO:
         Returns:
             tuple: (lista de pedidos, total)
         """
-        from src.models.config.sucursal_model import Sucursal
+        from src.models.catalogos.sucursal import Sucursal
         
         with get_db_session() as session:
             try:
