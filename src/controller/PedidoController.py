@@ -51,6 +51,7 @@ from src.schemas.pedido_schema import (
     PedidoResponseSchema,
     PedidoListSchema
 )
+from src.core.auth.jwt_helpers import get_current_user_roles, get_current_user_id
 
 logger = logging.getLogger(__name__)
 bp = Blueprint('pedidos', __name__, url_prefix='/api/pedidos')
@@ -498,13 +499,16 @@ def cancelar_pedido(pedido_id):
 @jwt_required()
 def listar_pedidos():
     """
-    Listar pedidos de sucursal
+    Listar pedidos de sucursal o de cliente
     ---
     tags:
       - Pedidos
     summary: Listar Pedidos
     description: |
       Lista pedidos con filtros opcionales.
+      - Si el usuario tiene rol CLIENTE: Lista sus pedidos de TODAS las sucursales
+      - Si es otro rol (empleado, admin): Lista pedidos de una sucursal específica
+      
       Todos los parámetros son opcionales.
     parameters:
       - in: body
@@ -514,7 +518,7 @@ def listar_pedidos():
           properties:
             sucursal_id:
               type: integer
-              description: ID de sucursal (opcional, si no se envía usa las del usuario)
+              description: ID de sucursal (ignorado si el usuario es CLIENTE)
             estado:
               type: integer
               description: "0=Iniciado, 3=Completo, 4=Cancelado, 5=Pagado (opcional)"
@@ -529,7 +533,7 @@ def listar_pedidos():
               description: "1=Dine-in, 2=Takeaway (opcional)"
             cliente_id:
               type: integer
-              description: "ID del cliente para filtrar pedidos (opcional)"
+              description: "ID del cliente para filtrar pedidos (ignorado si el usuario es CLIENTE)"
     responses:
       200:
         description: Lista de pedidos
@@ -538,16 +542,59 @@ def listar_pedidos():
         current_user = get_jwt_identity()
         usuario_id = current_user.get('id_usuario') if isinstance(current_user, dict) else current_user
         
+        # Detectar si el usuario tiene rol CLIENTE
+        roles = get_current_user_roles()
+        es_cliente = any(
+            (isinstance(r, dict) and r.get('nombre', '').upper() == 'CLIENTE') or
+            (isinstance(r, str) and r.upper() == 'CLIENTE')
+            for r in roles
+        )
+        
         # Obtener parámetros del body
         payload = request.get_json() or {}
-        sucursal_id = payload.get('sucursal_id')
         estado = payload.get('estado')
         fecha_desde = payload.get('fecha_desde')
         fecha_hasta = payload.get('fecha_hasta')
         tipo_pedido = payload.get('tipo_pedido')
+        
+        # Parsear fechas si vienen
+        try:
+            fecha_desde = datetime.fromisoformat(fecha_desde) if fecha_desde else None
+            fecha_hasta = datetime.fromisoformat(fecha_hasta) if fecha_hasta else None
+        except ValueError:
+            return jsonify({"error": "Formato fecha inválido (YYYY-MM-DD)"}), 400
+        
+        # ================================================================
+        # FLUJO CLIENTE: Lista sus propios pedidos de TODAS las sucursales
+        # ================================================================
+        if es_cliente:
+            pedidos, total = PedidoDAO.listar_pedidos_por_cliente(
+                cliente_id=usuario_id,  # El cliente solo ve SUS pedidos
+                estado=estado,
+                fecha_desde=fecha_desde,
+                fecha_hasta=fecha_hasta,
+                tipo_pedido=tipo_pedido
+            )
+            
+            return jsonify({
+                "pedidos": PedidoListSchema(many=True).dump(pedidos),
+                "total": total,
+                "es_cliente": True,
+                "filtros_aplicados": {
+                    "cliente_id": usuario_id,
+                    "estado": estado,
+                    "fecha_desde": fecha_desde.isoformat() if fecha_desde else None,
+                    "fecha_hasta": fecha_hasta.isoformat() if fecha_hasta else None,
+                    "tipo_pedido": tipo_pedido
+                }
+            }), 200
+        
+        # ================================================================
+        # FLUJO EMPLEADO/ADMIN: Lista pedidos de una sucursal específica
+        # ================================================================
+        sucursal_id = payload.get('sucursal_id')
         cliente_id = payload.get('cliente_id')
         
-        # Si no se especifica sucursal, usar las del usuario
         if sucursal_id:
             from src.core.utils.multitenant import validar_acceso_sucursal
             if not validar_acceso_sucursal(usuario_id, sucursal_id):
@@ -558,13 +605,6 @@ def listar_pedidos():
             if not sucursales_usuario :
                 return jsonify({"error": "Usuario sin sucursal asignada"}), 403
             sucursal_id = sucursales_usuario[0]  # Usar primera sucursal por defecto
-        
-        # Parsear fechas si vienen
-        try:
-            fecha_desde = datetime.fromisoformat(fecha_desde) if fecha_desde else None
-            fecha_hasta = datetime.fromisoformat(fecha_hasta) if fecha_hasta else None
-        except ValueError:
-            return jsonify({"error": "Formato fecha inválido (YYYY-MM-DD)"}), 400
         
         pedidos, total = PedidoDAO.listar_pedidos_por_sucursal(
             sucursal_id=sucursal_id,
@@ -578,6 +618,7 @@ def listar_pedidos():
         return jsonify({
             "pedidos": PedidoListSchema(many=True).dump(pedidos),
             "total": total,
+            "es_cliente": False,
             "filtros_aplicados": {
                 "sucursal_id": sucursal_id,
                 "estado": estado,

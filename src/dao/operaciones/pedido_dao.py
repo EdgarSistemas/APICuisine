@@ -424,6 +424,76 @@ class PedidoDAO:
     
     
     @staticmethod
+    def listar_pedidos_por_cliente(cliente_id: int, fecha_desde=None, fecha_hasta=None, 
+                                    estado=None, tipo_pedido=None, offset=0, limit=50):
+        """
+        Lista pedidos de un cliente ACROSS todas las sucursales.
+        Este método es exclusivo para usuarios con rol CLIENTE.
+        
+        Args:
+            cliente_id: ID del cliente (usualmente el mismo id_usuario del JWT)
+            fecha_desde: Fecha mínima (opcional)
+            fecha_hasta: Fecha máxima (opcional)
+            estado: Estado del pedido (opcional): 0=Iniciado, 3=Completo, 4=Cancelado, 5=Pagado
+            tipo_pedido: Tipo de pedido (opcional): 1=Dine-in, 2=Takeaway
+            offset: Paginación offset
+            limit: Paginación limit
+        
+        Returns:
+            tuple: (lista de pedidos, total)
+        """
+        from src.models.config.sucursal_model import Sucursal
+        
+        with get_db_session() as session:
+            try:
+                # Query base: solo pedidos de este cliente, sin filtrar por sucursal
+                query = session.query(Pedido).filter(Pedido.cliente_id == cliente_id)
+                
+                if fecha_desde:
+                    query = query.filter(Pedido.created_at >= fecha_desde)
+                if fecha_hasta:
+                    query = query.filter(Pedido.created_at <= fecha_hasta)
+                if estado is not None:
+                    query = query.filter(Pedido.estado_pedido == estado)
+                if tipo_pedido is not None:
+                    query = query.filter(Pedido.tipo_pedido == tipo_pedido)
+                
+                total = query.count()
+                
+                pedidos = query.order_by(Pedido.created_at.desc()).offset(offset).limit(limit).all()
+                
+                # Obtener nombres de sucursales para contexto
+                sucursal_ids = list(set(p.sucursal_id for p in pedidos))
+                sucursales_map = {}
+                if sucursal_ids:
+                    sucursales = session.query(Sucursal).filter(Sucursal.id_sucursal.in_(sucursal_ids)).all()
+                    sucursales_map = {s.id_sucursal: s.nombre for s in sucursales}
+                
+                return (
+                    [
+                        {
+                            'id_pedido': p.id_pedido,
+                            'folio': p.folio,
+                            'sucursal_id': p.sucursal_id,
+                            'sucursal_nombre': sucursales_map.get(p.sucursal_id, 'Desconocida'),
+                            'cliente_id': p.cliente_id,
+                            'tipo_pedido': p.tipo_pedido,
+                            'canal': p.canal,
+                            'mesa_id': p.mesa_id,
+                            'estado_pedido': p.estado_pedido,
+                            'created_at': p.created_at.isoformat() if p.created_at else None
+                        }
+                        for p in pedidos
+                    ],
+                    total
+                )
+            
+            except Exception as e:
+                logger.error(f"Error al listar pedidos de cliente: {str(e)}")
+                raise
+    
+    
+    @staticmethod
     def obtener_pedidos_por_estado(sucursal_id: int, estado: int):
         """Obtiene todos los pedidos de una sucursal en un estado específico"""
         with get_db_session() as session:
