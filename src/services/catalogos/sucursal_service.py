@@ -74,7 +74,7 @@ class SucursalService:
             return self.dao.listar_todas()
         # Si no es admin, aquí podrías filtrar por sucursales permitidas
         # Por ahora, retorna todas (puedes personalizar la lógica si tienes multi-tenant)
-        return self.dao.listar_todas()
+        return self.dao.listar_por_gerente(usuario_id)
     
     def obtener_sucursales_activas(self) -> List[dict]:
         """
